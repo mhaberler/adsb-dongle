@@ -1,0 +1,14 @@
+{
+  "name": "libmodes",
+  "version": "0.0.1+7ff29c93",
+  "description": "Standalone Mode-S/DF17/DF18 decoder, vendored from Displacer/libmodes (BSD-2), patched for sensorpod DF18 aliasing and geo/baro altitude delta",
+  "license": "BSD-2-Clause",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Displacer/libmodes.git"
+  },
+  "build": {
+    "srcDir": "src",
+    "includeDir": "include"
+  }
+}
