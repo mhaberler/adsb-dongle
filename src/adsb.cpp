@@ -386,6 +386,20 @@ static void adsb_table_loop() {
   }
 }
 
+static void adsb_publish_stats() {
+  AdsbStats s = adsb_get_stats();
+  JsonDocument doc;
+  doc["frames_seen"] = s.frames_seen;
+  doc["crc_fail"] = s.crc_fail;
+  doc["decoded"] = s.decoded;
+  doc["dropped_lines"] = s.dropped_lines;
+  doc["dropped_overflow"] = s.dropped_overflow;
+  doc["aircraft_count"] = s.aircraft_count;
+  String payload;
+  serializeJson(doc, payload);
+  Serial.println(payload);
+}
+
 void adsb_loop() {
   size_t item_size = 0;
   void *item = xRingbufferReceive(adsb_ringbuf, &item_size, 0);
@@ -394,12 +408,34 @@ void adsb_loop() {
     vRingbufferReturnItem(adsb_ringbuf, item);
   }
 
-  static uint32_t last_table_tick = 0;
   uint32_t now = millis();
+
+  static uint32_t last_table_tick = 0;
   if (now - last_table_tick >= 250) {
     last_table_tick = now;
     adsb_table_loop();
   }
+
+  static uint32_t last_stats_tick = 0;
+  if (now - last_stats_tick >= 5000) {
+    last_stats_tick = now;
+    adsb_publish_stats();
+  }
+}
+
+AdsbStats adsb_get_stats() {
+  AdsbStats s;
+  s.frames_seen = adsb_frames_seen;
+  s.crc_fail = adsb_crc_fail;
+  s.decoded = adsb_decoded;
+  s.dropped_lines = adsb_dropped_lines;
+  s.dropped_overflow = adsb_dropped_overflow;
+  uint32_t count = 0;
+  for (auto &ac : aircraft_table)
+    if (ac.used)
+      count++;
+  s.aircraft_count = count;
+  return s;
 }
 
 #endif // ADSB_UART
