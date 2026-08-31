@@ -1,7 +1,9 @@
 import "./style.css";
 import { SerialLineReader } from "./serial";
-import { parseLine } from "./protocol";
+import { classifyLine, parseLine, parseRawFrame } from "./protocol";
+import type { StatsMessage } from "./protocol";
 import { AircraftMap } from "./map";
+import { AircraftStore } from "./aircraft-store";
 
 const connectBtn = document.querySelector<HTMLButtonElement>("#connect-btn")!;
 const connStatus = document.querySelector<HTMLSpanElement>("#conn-status")!;
@@ -10,12 +12,34 @@ const statsEl = document.querySelector<HTMLDivElement>("#stats")!;
 const map = new AircraftMap("map");
 const serial = new SerialLineReader();
 
+type StreamMode = "unknown" | "ndjson" | "raw";
+let mode: StreamMode = "unknown";
+let rawCommandSent = false;
+const rawStore = new AircraftStore();
+let sweepTimer: number | undefined;
+let statsTimer: number | undefined;
+
+function renderStats(s: StatsMessage): void {
+  statsEl.textContent =
+    `frames: ${s.frames_seen}  ` +
+    `crc_fail: ${s.crc_fail}  ` +
+    `decoded: ${s.decoded}  ` +
+    `dropped: ${s.dropped_lines + s.dropped_overflow}  ` +
+    `aircraft: ${s.aircraft_count}`;
+}
+
 function setConnected(connected: boolean): void {
   connStatus.textContent = connected ? "connected" : "disconnected";
   connectBtn.textContent = connected ? "Disconnect" : "Connect";
 }
 
-function handleLine(line: string): void {
+// Used only during baud auto-probe: a line is "valid" if it's a recognized
+// stream shape (NDJSON, raw frame, or a module command reply).
+function isRecognizedLine(line: string): boolean {
+  return classifyLine(line) !== "unknown";
+}
+
+function handleNdjsonLine(line: string): void {
   const msg = parseLine(line);
   if (!msg) return;
 
@@ -27,19 +51,77 @@ function handleLine(line: string): void {
       map.remove(msg.data.hex);
       break;
     case "stats":
-      statsEl.textContent =
-        `frames: ${msg.data.frames_seen}  ` +
-        `crc_fail: ${msg.data.crc_fail}  ` +
-        `decoded: ${msg.data.decoded}  ` +
-        `dropped: ${msg.data.dropped_lines + msg.data.dropped_overflow}  ` +
-        `aircraft: ${msg.data.aircraft_count}`;
+      renderStats(msg.data);
       break;
+  }
+}
+
+function handleRawLine(line: string): void {
+  const kind = classifyLine(line);
+  if (kind !== "rawframe") return; // ignore command-reply / unknown lines
+
+  const frame = parseRawFrame(line);
+  if (!frame) {
+    rawStore.recordDroppedLine();
+    return;
+  }
+
+  for (const event of rawStore.processFrame(frame)) {
+    if (event.kind === "update") map.upsert(event.data);
+    else map.remove(event.hex);
+  }
+}
+
+function handleLine(line: string): void {
+  if (mode === "unknown") {
+    const kind = classifyLine(line);
+    if (kind === "ndjson") mode = "ndjson";
+    else if (kind === "rawframe") mode = "raw";
+    else return; // command-reply / unknown before we've locked a mode
+  }
+
+  if (mode === "ndjson") {
+    handleNdjsonLine(line);
+  } else if (mode === "raw") {
+    if (!rawCommandSent) {
+      rawCommandSent = true;
+      // GNS5892 command interface: "#49-03<CR>" = DF17/18/19-only output
+      // mode. Harmless no-op if this line actually came via an ESP32
+      // pass-through rather than a directly-wired module.
+      void serial.write("#49-03\r");
+    }
+    handleRawLine(line);
+
+    if (statsTimer === undefined) {
+      statsTimer = window.setInterval(() => renderStats(rawStore.getStats()), 5000);
+    }
+    if (sweepTimer === undefined) {
+      sweepTimer = window.setInterval(() => {
+        for (const event of rawStore.sweep()) {
+          if (event.kind === "remove") map.remove(event.hex);
+        }
+      }, 1000);
+    }
+  }
+}
+
+function resetState(): void {
+  mode = "unknown";
+  rawCommandSent = false;
+  if (sweepTimer !== undefined) {
+    window.clearInterval(sweepTimer);
+    sweepTimer = undefined;
+  }
+  if (statsTimer !== undefined) {
+    window.clearInterval(statsTimer);
+    statsTimer = undefined;
   }
 }
 
 function onDisconnect(): void {
   setConnected(false);
   statsEl.textContent = "";
+  resetState();
 }
 
 connectBtn.addEventListener("click", async () => {
@@ -50,7 +132,8 @@ connectBtn.addEventListener("click", async () => {
   }
 
   try {
-    await serial.connect(handleLine, onDisconnect);
+    resetState();
+    await serial.connect(isRecognizedLine, handleLine, onDisconnect);
     setConnected(true);
   } catch (err) {
     connStatus.textContent = `error: ${(err as Error).message}`;

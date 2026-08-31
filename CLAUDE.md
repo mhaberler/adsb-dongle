@@ -85,4 +85,66 @@ aircraft table + publish), all in `src/adsb.cpp`.
 ## Wiring
 
 Rextron 89001090 module ↔ ESP32-C6: 3V3/GND, module `TxD1` (out) → GPIO19,
-module `RxD1` (in) → GPIO5. Fixed 921600 8N1, no flow control.
+module `RxD1` (in) → GPIO5. Fixed 921600 8N1, no flow control. Also works
+with a GNS5892R module (see README.md for datasheet link).
+
+## Web viewer (`webapp/`)
+
+Browser-only ADS-B map viewer — Vite + vanilla TypeScript, bun package
+manager, no server. Connects over the Web Serial API and plots aircraft on
+a Leaflet/OSM map (`webapp/src/map.ts`).
+
+```sh
+cd webapp
+bun install
+bun dev             # http://localhost:5173
+bun run build       # tsc + vite build -> webapp/dist
+bun test            # decoder unit tests, no hardware needed
+```
+
+**Two input modes, auto-detected by first line character** (`webapp/src/main.ts`
+`handleLine`): `{` → NDJSON from this repo's dongle firmware (parsed by
+`protocol.ts` `parseLine`, rendered directly via `map.ts`); `*` → raw
+ASCII-hex Mode-S frames from a GNS5892R/Rextron module wired directly to a
+USB-UART adapter (921600 baud) — decoded **entirely in the browser**, no
+firmware involved.
+
+- **`serial.ts`**: Web Serial connect flow. Auto-probes baud (115200 then
+  921600, `PROBE_BAUD_RATES`) by opening the port and watching for a
+  recognizable line within `PROBE_WINDOW_MS` (2 s); reopens at whichever
+  rate matches. Also exposes `write()` for sending module commands.
+- **`modes.ts`**: TypeScript port of the **decode half** of
+  `lib/libmodes/src/mode-s.c` (CRC table + `mode_s_decode()`), restricted
+  to DF17 + DF18 CF 0/1/2/6 (same scope as the firmware) — the demodulator
+  code (`mode_s_detect`, magnitude vectors) is not ported since input
+  frames arrive already framed, same as the firmware. Carries the same
+  four local patches as `lib/libmodes` (DF18 aliasing, ME19 geo−baro
+  delta, ME31 opstatus fields, ME28 emergency/squawk) — see comment block
+  at top of `lib/libmodes/include/mode-s.h` for patch details, which apply
+  identically here. CRC is check-only, matching firmware config
+  (`fix_errors=0`, `aggressive=0`).
+- **`cpr.ts`**: verbatim port of `src/cpr.c`'s `decodeCPRairborne()` (global
+  airborne solve only, same as firmware).
+- **`aircraft-store.ts`**: browser-side equivalent of the firmware's
+  `Aircraft` table (`src/adsb.cpp`) — keyed by ICAO in a `Map` (no 100-slot
+  cap, unlike the firmware's static array), same 60 s TTL eviction and CPR
+  even/odd pairing (10 s window), same `aircraft.json`-style field
+  omission rules. Feeds `AircraftMessage`/removal events straight into the
+  same `map.ts` used by the NDJSON path — both input modes converge on one
+  rendering pipeline. Unlike the firmware there's no per-aircraft publish
+  throttle (browser has no serial-bandwidth constraint); marker updates
+  happen on every decoded frame.
+- In raw mode, `main.ts` sends `#49-03\r` once on connect (GNS5892 command
+  interface: DF17/18/19-only output mode) to cut the short-frame (DF4/5/
+  20/21) traffic the module emits by default — harmless no-op if the
+  stream is actually coming through an ESP32 pass-through.
+- **`modes.test.ts`**: unit tests using known-good DF17 example frames from
+  the [GNS5892 command interface doc](https://www.gns-electronics.de/wp-content/uploads/2019/10/GNS5892-command-interface-V1.0.pdf).
+  Expected values were cross-checked by compiling and running
+  `lib/libmodes/src/mode-s.c` directly on the same frames (see git history
+  for the one-off comparison script) — confirms bit-level parity with the
+  firmware decoder, not just internal self-consistency.
+
+Deliberately out of scope for the raw-frame decoder (matches firmware):
+DF4/5/20/21 short frames, ME31 subtype 1 (surface), position-derived
+NIC/RC, bit-error correction.

@@ -73,9 +73,27 @@ cd webapp
 bun install
 bun dev             # http://localhost:5173, click Connect and pick the dongle's serial port
 bun run build       # production build to webapp/dist
+bun test            # decoder unit tests (no hardware needed)
 ```
 
 Requires a Chromium-based browser (Web Serial isn't supported in Firefox/Safari).
+
+The webapp works with two kinds of serial source, auto-detected by line
+shape (no separate mode to pick):
+
+- **The ESP32 dongle** (this repo's firmware) at 115200 baud, streaming the
+  decoded NDJSON described above.
+- **A GNS5892R/Rextron module wired directly** to a USB-UART adapter at
+  921600 baud, streaming raw ASCII-hex Mode-S frames (`*<28 hex chars>;`,
+  per the [GNS5892 command interface doc](https://www.gns-electronics.de/wp-content/uploads/2019/10/GNS5892-command-interface-V1.0.pdf)).
+  In this mode the webapp does the full decode in-browser — a TypeScript
+  port of this repo's own firmware decode path (`webapp/src/modes.ts`,
+  `webapp/src/cpr.ts`, `webapp/src/aircraft-store.ts`; see
+  [CLAUDE.md](CLAUDE.md) for details) — and sends `#49-03\r` on connect to
+  put the module in DF17/18/19-only output mode.
+
+Connect auto-probes 115200 then 921600 to find whichever source is
+plugged in.
 
 ## More detail
 

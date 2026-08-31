@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "bun test"
   },
   "devDependencies": {
     "@types/leaflet": "^1.9.22",
     "@types/w3c-web-serial": "^1.0.8",
+    "bun-types": "^1.4.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.2"
   },
