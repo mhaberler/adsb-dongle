@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ADS-B Dongle</string>
+    <string name="title_activity_main">ADS-B Dongle</string>
+    <string name="package_name">io.github.mhaberler.adsbdongle</string>
+    <string name="custom_url_scheme">io.github.mhaberler.adsbdongle</string>
+</resources>

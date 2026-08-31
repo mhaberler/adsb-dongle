@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto-launch matches for USB_DEVICE_ATTACHED (AndroidManifest.xml).
+     vendor-id is decimal. FTDI = 0x0403 = 1027 (direct-wired module via
+     an FTDI USB-UART adapter, per README.md). Espressif = 0x303A = 12346
+     (this repo's ESP32-C6 dongle, USB-CDC). -->
+<resources>
+    <usb-device vendor-id="1027" />
+    <usb-device vendor-id="12346" />
+</resources>

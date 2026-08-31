@@ -4,3 +4,10 @@ untracked/
 .vscode/
 webapp/node_modules/
 webapp/dist/
+app/node_modules/
+app/dist/
+
+# Claude Code local state (skill cache, session lock, permission cache)
+.agents/
+.claude/
+skills-lock.json

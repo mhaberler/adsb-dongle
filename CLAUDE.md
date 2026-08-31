@@ -188,3 +188,82 @@ direct-wired module, not the dongle).
 Deliberately out of scope for the raw-frame decoder (matches firmware):
 DF4/5/20/21 short frames, ME31 subtype 1 (surface), position-derived
 NIC/RC, bit-error correction.
+
+## Android app (`app/`)
+
+Capacitor-wrapped Android app, added because the webapp's WebUSB fallback
+(above) didn't work with the user's FTDI adapter — Android WebUSB support
+for FTDI-class devices is unreliable in practice, even though the API
+exists. `app/` uses a **native plugin** instead:
+[`@leeskies/capacitor-usb-serial`](https://github.com/LeeSkies/capacitor-usb-serial),
+which wraps [mik3y/usb-serial-for-android](https://github.com/mik3y/usb-serial-for-android)
+— the same library behind the "Serial USB Terminal" Android app, confirmed
+working with this hardware. Android-only (no iOS target; the underlying
+library is Android-only).
+
+**`app/` is a separate top-level project, not a build of `webapp/`.**
+It has its own `package.json`/`vite.config.ts`/`index.html`/`src/main.ts`,
+but imports the shared decode/map pipeline straight from `../webapp/src`
+(`transport.ts`, `protocol.ts`, `modes.ts`, `cpr.ts`, `aircraft-store.ts`,
+`map.ts` — via relative imports, `app/tsconfig.json` `include`s
+`../webapp/src` and `app/vite.config.ts` widens dev-server `fs.allow` to
+reach it). **`webapp/` itself is never modified for the app** — the app
+only reads from it. `app/src/style.css` is a copy of webapp's (plus
+`env(safe-area-inset-*)` padding for the toolbar/stats since this runs
+edge-to-edge in a native shell), and `app/src/main.ts` is a copy of
+webapp's `main.ts` with the transport section and geolocation source
+swapped for native equivalents — everything else (mode autodetect,
+`#49-03\r`, stats overlay, TTL sweep) is identical logic, just re-wired.
+
+```sh
+cd app
+bun install
+bun run sync        # bun run build (tsc + vite) + bunx cap sync android
+bun run android      # sync + bunx cap run android
+```
+
+Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
+
+- **`transport-native.ts`**: `ByteTransport` over the plugin. `open(baud)`
+  opens the port, `setParameters` (baud/8N1), asserts DTR+RTS (same
+  reason as the webapp's CDC-ACM driver — the ESP32's Arduino CDC stack
+  buffers output until DTR is seen), then `startReading` and attaches a
+  `data` listener. The plugin delivers bytes as base64-encoded chunks via
+  events (not a pull-based stream), so `read()` is backed by a small
+  async push/pull queue: the `data` listener pushes decoded
+  `Uint8Array`s, `read()` awaits the next one. `pickDevice()`/
+  `requestNativeTransport()` picks the first attached device (this app
+  assumes one adapter plugged in at a time) and requests permission.
+- **`main.ts`**: same `LineReader`/mode-autodetect wiring as
+  `webapp/src/main.ts`, but `requestTransport()` is unconditional (native
+  only, no platform branching) with probe order `[921600, 115200]`
+  (FTDI-wired module is the primary case). Adds **auto-connect**: tries
+  `connect(silent: true)` on startup and on the plugin's `attached`
+  event, swallowing "no device" errors; a manual Connect click surfaces
+  errors normally. Geolocation uses `@capacitor/geolocation`'s
+  `watchPosition` (its callback signature is `(position, err?)`, not the
+  two-callback web API) instead of `navigator.geolocation` — the webview's
+  built-in geolocation is unreliable inside Capacitor.
+- **Android manifest** (`app/android/app/src/main/AndroidManifest.xml`):
+  `<uses-feature android:name="android.hardware.usb.host" android:required="false"/>`
+  (`required="false"` so the app still installs on devices without USB
+  host mode), `ACCESS_COARSE_LOCATION`/`ACCESS_FINE_LOCATION`, and a
+  `USB_DEVICE_ATTACHED` intent-filter + `device_filter.xml` meta-data on
+  `MainActivity` so plugging in a matching device offers to launch the
+  app with permission pre-granted.
+- **`res/xml/device_filter.xml`**: vendor-ID filter for auto-launch —
+  decimal `1027` (0x0403, FTDI) and `12346` (0x303A, Espressif/ESP32-C6).
+- **`android/build.gradle`**: adds the **JitPack** Maven repo
+  (`https://jitpack.io`) at the `allprojects` level — required because
+  `mik3y/usb-serial-for-android` (the plugin's underlying dependency) is
+  published there, not on Maven Central/Google's repo. Omitting this
+  fails `:app:checkDebugAarMetadata` with "Could not find
+  com.github.mik3y:usb-serial-for-android" — this was hit and fixed
+  during initial setup, not a hypothetical.
+- **minSdk 24** in `android/variables.gradle` — required by the plugin;
+  already the Capacitor-template default here, left unchanged.
+
+CI: `.github/workflows/android-apk.yml` builds a debug APK
+(`./gradlew assembleDebug` after `bun run sync`) on pushes touching
+`app/**` or `webapp/src/**`, uploaded as a workflow artifact. Debug-signed
+only, no release signing configured.

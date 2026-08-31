@@ -115,6 +115,32 @@ plugged in.
 
 *Directly decoding hex messages in-browser*
 
+## Android app
+
+`app/` is a Capacitor-wrapped Android app for when WebUSB doesn't work
+with your FTDI adapter (as it didn't on the device this was built for).
+It uses a native plugin,
+[`@leeskies/capacitor-usb-serial`](https://github.com/LeeSkies/capacitor-usb-serial)
+(wraps [mik3y/usb-serial-for-android](https://github.com/mik3y/usb-serial-for-android),
+the same library the "Serial USB Terminal" app on Google Play uses)
+instead of any browser API — Android-only, no iOS target. It imports the
+shared decode/map pipeline directly from `webapp/src/` (no code
+duplication) and auto-detects both stream formats exactly like the
+webapp. Auto-launches and auto-connects when the FTDI adapter or the
+ESP32 dongle is plugged in.
+
+```sh
+cd app
+bun install
+bun run sync        # build web assets + bunx cap sync android
+bun run android      # sync + bunx cap run android (needs a device/emulator)
+```
+
+A GitHub Actions workflow (`.github/workflows/android-apk.yml`) builds a
+debug APK on every push touching `app/` or `webapp/src/` and uploads it
+as a build artifact — no local Android SDK needed to get an installable
+APK; download it from the workflow run.
+
 ## More detail
 
 See [CLAUDE.md](CLAUDE.md) for architecture (reader task, ring buffer,
