@@ -14,17 +14,24 @@ const map = new AircraftMap("map");
 const serial = new SerialLineReader();
 
 if ("geolocation" in navigator) {
+  let geoFailStreak = 0;
   navigator.geolocation.watchPosition(
     (pos) => {
+      geoFailStreak = 0;
       map.setMyLocation(pos.coords.latitude, pos.coords.longitude);
       geoStatus.textContent = "";
     },
     (err) => {
       // PERMISSION_DENIED(1) / POSITION_UNAVAILABLE(2) / TIMEOUT(3).
       // watchPosition keeps retrying on its own for 2/3; only 1 is final.
-      geoStatus.textContent = `location: ${err.message}`;
+      // A first-fix TIMEOUT/POSITION_UNAVAILABLE is common while the OS
+      // location backend warms up, so don't alarm on a single miss.
+      geoFailStreak++;
+      if (err.code === GeolocationPositionError.PERMISSION_DENIED || geoFailStreak >= 3) {
+        geoStatus.textContent = `location: ${err.message}`;
+      }
     },
-    { enableHighAccuracy: false, maximumAge: 30000, timeout: 15000 },
+    { enableHighAccuracy: false, maximumAge: 30000, timeout: 20000 },
   );
 } else {
   geoStatus.textContent = "location: not supported";
