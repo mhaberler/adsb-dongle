@@ -12,6 +12,16 @@ const statsEl = document.querySelector<HTMLDivElement>("#stats")!;
 const map = new AircraftMap("map");
 const serial = new SerialLineReader();
 
+if ("geolocation" in navigator) {
+  navigator.geolocation.watchPosition(
+    (pos) => map.setMyLocation(pos.coords.latitude, pos.coords.longitude),
+    () => {
+      // Permission denied or unavailable; silently skip the location marker.
+    },
+    { enableHighAccuracy: true },
+  );
+}
+
 type StreamMode = "unknown" | "ndjson" | "raw";
 let mode: StreamMode = "unknown";
 let rawCommandSent = false;
@@ -20,12 +30,13 @@ let sweepTimer: number | undefined;
 let statsTimer: number | undefined;
 
 function renderStats(s: StatsMessage): void {
-  statsEl.textContent =
-    `frames: ${s.frames_seen}  ` +
-    `crc_fail: ${s.crc_fail}  ` +
-    `decoded: ${s.decoded}  ` +
-    `dropped: ${s.dropped_lines + s.dropped_overflow}  ` +
-    `aircraft: ${s.aircraft_count}`;
+  statsEl.textContent = [
+    `frames: ${s.frames_seen}`,
+    `crc_fail: ${s.crc_fail}`,
+    `decoded: ${s.decoded}`,
+    `dropped: ${s.dropped_lines + s.dropped_overflow}`,
+    `aircraft: ${s.aircraft_count}`,
+  ].join("\n");
 }
 
 function setConnected(connected: boolean): void {

@@ -23,6 +23,15 @@ function planeIcon(track: number | undefined): L.DivIcon {
   });
 }
 
+function myLocationIcon(): L.DivIcon {
+  return L.divIcon({
+    className: "my-location-icon",
+    html: `<div class="my-location-dot"></div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8],
+  });
+}
+
 function popupHtml(ac: AircraftMessage): string {
   const rows: [string, string | number | undefined][] = [
     ["flight", ac.flight?.trim()],
@@ -45,6 +54,8 @@ export class AircraftMap {
   private map: L.Map;
   private markers = new Map<string, L.Marker>();
   private hasFitFirstAircraft = false;
+  private myLocationMarker: L.Marker | null = null;
+  private hasFitMyLocation = false;
 
   constructor(containerId: string) {
     this.map = L.map(containerId).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
@@ -52,6 +63,31 @@ export class AircraftMap {
       attribution: "&copy; OpenStreetMap contributors",
       maxZoom: 19,
     }).addTo(this.map);
+  }
+
+  setMyLocation(lat: number, lon: number): void {
+    const latlng: L.LatLngTuple = [lat, lon];
+    if (this.myLocationMarker) {
+      this.myLocationMarker.setLatLng(latlng);
+    } else {
+      this.myLocationMarker = L.marker(latlng, {
+        icon: myLocationIcon(),
+        zIndexOffset: 1000,
+      }).addTo(this.map);
+    }
+
+    // Only auto-fit to "my location" if no aircraft has claimed the initial
+    // view yet (aircraft take priority once any appear).
+    if (!this.hasFitMyLocation && !this.hasFitFirstAircraft) {
+      this.hasFitMyLocation = true;
+      this.map.setView(latlng, FIRST_AIRCRAFT_ZOOM);
+    }
+  }
+
+  clearMyLocation(): void {
+    this.myLocationMarker?.remove();
+    this.myLocationMarker = null;
+    this.hasFitMyLocation = false;
   }
 
   upsert(ac: AircraftMessage): void {

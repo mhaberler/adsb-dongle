@@ -98,6 +98,10 @@ shape (no separate mode to pick):
 Connect auto-probes 115200 then 921600 to find whichever source is
 plugged in.
 
+![Directly decoding hex messages in-browser](assets/Screenshot%202026-08-31%20at%2009.23.21.png)
+
+*Directly decoding hex messages in-browser*
+
 ## More detail
 
 See [CLAUDE.md](CLAUDE.md) for architecture (reader task, ring buffer,
