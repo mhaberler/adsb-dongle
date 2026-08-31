@@ -60,6 +60,23 @@ e.g. `lat`/`lon`/`seen_pos` only appear after a valid even/odd CPR pair,
 status message. See [CLAUDE.md](CLAUDE.md) for the full field list and
 decoder internals.
 
+## Web viewer
+
+`webapp/` is a browser-only ADS-B viewer: connects to the dongle over the
+[Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API)
+(no server, no native app) and plots live aircraft on a Leaflet/OpenStreetMap
+map, styled after [airplanejs](https://github.com/watson/airplanejs). Built
+with Vite + vanilla TypeScript.
+
+```sh
+cd webapp
+bun install
+bun dev             # http://localhost:5173, click Connect and pick the dongle's serial port
+bun run build       # production build to webapp/dist
+```
+
+Requires a Chromium-based browser (Web Serial isn't supported in Firefox/Safari).
+
 ## More detail
 
 See [CLAUDE.md](CLAUDE.md) for architecture (reader task, ring buffer,
