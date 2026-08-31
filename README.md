@@ -10,7 +10,7 @@ No networking, no display — UART in, JSON out.
 Either module works as-is; both output ASCII `*<hex>;` Mode-S frames over
 TTL UART at a fixed 921600 8N1, no flow control.
 
-- **Rextron 89001090**
+- **Rextron 89001090**, [Technical datasheet](https://rextronaviation.weebly.com/uploads/1/3/1/2/131270069/89001090_technical.pdf)
 - **GNS5892R**, [Datasheet V13](https://www.gns-electronics.de/wp-content/uploads/2026/04/GNS5892R_ADSBModul_datasheet_V13.pdf)
 
 ## Wiring
@@ -83,14 +83,17 @@ shape (no separate mode to pick):
 
 - **The ESP32 dongle** (this repo's firmware) at 115200 baud, streaming the
   decoded NDJSON described above.
-- **A GNS5892R/Rextron module wired directly** to a USB-UART adapter at
-  921600 baud, streaming raw ASCII-hex Mode-S frames (`*<28 hex chars>;`,
-  per the [GNS5892 command interface doc](https://www.gns-electronics.de/wp-content/uploads/2019/10/GNS5892-command-interface-V1.0.pdf)).
-  In this mode the webapp does the full decode in-browser — a TypeScript
-  port of this repo's own firmware decode path (`webapp/src/modes.ts`,
-  `webapp/src/cpr.ts`, `webapp/src/aircraft-store.ts`; see
-  [CLAUDE.md](CLAUDE.md) for details) — and sends `#49-03\r` on connect to
-  put the module in DF17/18/19-only output mode.
+- **A GNS5892R/Rextron module wired directly to a USB-UART adapter**
+  (e.g. an FTDI **FT230X** breakout — see [Jim's FTDI FT-X errata notes](https://jim.sh/ftx/#click-ftdi-errata)
+  for known FT-X quirks) at 921600 baud, streaming raw ASCII-hex Mode-S
+  frames (`*<28 hex chars>;`, per the
+  [GNS5892 command interface doc](https://www.gns-electronics.de/wp-content/uploads/2019/10/GNS5892-command-interface-V1.0.pdf)).
+  No ESP32 involved — the adapter's USB-CDC port is opened directly via
+  Web Serial. In this mode the webapp does the full decode in-browser — a
+  TypeScript port of this repo's own firmware decode path
+  (`webapp/src/modes.ts`, `webapp/src/cpr.ts`, `webapp/src/aircraft-store.ts`;
+  see [CLAUDE.md](CLAUDE.md) for details) — and sends `#49-03\r` on connect
+  to put the module in DF17/18/19-only output mode.
 
 Connect auto-probes 115200 then 921600 to find whichever source is
 plugged in.
