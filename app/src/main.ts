@@ -16,9 +16,12 @@ const geoStatus = document.querySelector<HTMLSpanElement>("#geo-status")!;
 const map = new AircraftMap("map");
 const lineReader = new LineReader();
 
-// FTDI-wired module is the primary Android case (see README.md); the
-// ESP32 dongle's NDJSON at 115200 is also autodetected once connected.
-const PROBE_ORDER = [921600, 115200];
+// Fixed baud, no auto-probe: this app only targets the FTDI-wired module
+// (see README.md), and the probe's close+reopen cycle raced the native
+// Android USB-serial driver's async teardown ("No connected device"
+// errors, repeated disconnect/reconnect loop) - not worth it for a
+// single known device/rate.
+const BAUD = 921600;
 
 let connecting = false;
 
@@ -74,12 +77,6 @@ function setConnected(connected: boolean): void {
   connectBtn.textContent = connected ? "Disconnect" : "Connect";
 }
 
-// Used only during baud auto-probe: a line is "valid" if it's a recognized
-// stream shape (NDJSON, raw frame, or a module command reply).
-function isRecognizedLine(line: string): boolean {
-  return classifyLine(line) !== "unknown";
-}
-
 function handleNdjsonLine(line: string): void {
   const msg = parseLine(line);
   if (!msg) return;
@@ -127,9 +124,10 @@ function handleLine(line: string): void {
     if (!rawCommandSent) {
       rawCommandSent = true;
       // GNS5892 command interface: "#49-03<CR>" = DF17/18/19-only output
-      // mode. Harmless no-op if this line actually came via an ESP32
-      // pass-through rather than a directly-wired module.
-      void lineReader.write("#49-03\r");
+      // mode. Disabled for now (not the cause of the reconnect-loop bug
+      // fixed in transport.ts/BAUD above - that was confirmed to be the
+      // baud-probe's close+reopen race, unrelated to this command).
+      // void lineReader.write("#49-03\r");
     }
     handleRawLine(line);
 
@@ -171,7 +169,7 @@ async function connect(silent: boolean): Promise<void> {
   try {
     resetState();
     const transport = await requestNativeTransport();
-    await lineReader.connect(transport, PROBE_ORDER, isRecognizedLine, handleLine, onDisconnect);
+    await lineReader.connectAt(transport, BAUD, handleLine, onDisconnect);
     setConnected(true);
   } catch (err) {
     // Auto-connect attempts (startup, device-attach) stay quiet when

@@ -40,28 +40,67 @@ export class LineReader {
       onDisconnect();
     });
 
-    const chosenBaud = await this.probeBaud(transport, probeOrder, isValidLine);
-    await this.openAt(transport, chosenBaud, onLine);
+    const chosenBaud = await this.probeAndOpen(transport, probeOrder, isValidLine, onLine);
     return chosenBaud;
   }
 
-  private async probeBaud(
+  // Opens directly at a fixed baud, no probing. Use when the caller
+  // already knows the rate (e.g. a native-only transport wired to one
+  // known device type) and wants to skip the probe-window latency
+  // entirely rather than pass a single-element probeOrder to connect().
+  async connectAt(
+    transport: ByteTransport,
+    baud: number,
+    onLine: LineHandler,
+    onDisconnect: () => void,
+  ): Promise<void> {
+    this.transport = transport;
+    transport.setOnDisconnect(() => {
+      this.cleanup();
+      onDisconnect();
+    });
+
+    await transport.open(baud);
+    this.startReadLoop(transport, onLine, "");
+  }
+
+  // Probes baud rates in `probeOrder`. On a match (or after the last rate,
+  // as a fallback), keeps the already-open port at that rate and starts
+  // the real read loop directly - no close+reopen at the same baud. Some
+  // native transports (e.g. Android USB-serial) need time to tear down a
+  // closed connection before it can be reopened, and an immediate reopen
+  // at the same rate is both unnecessary and racy there. Only closes
+  // between attempts when moving on to a *different* rate to try next.
+  private async probeAndOpen(
     transport: ByteTransport,
     probeOrder: number[],
     isValidLine: (line: string) => boolean,
+    onLine: LineHandler,
   ): Promise<number> {
-    for (const baud of probeOrder) {
-      const found = await this.tryBaud(transport, baud, isValidLine);
-      if (found) return baud;
+    for (let i = 0; i < probeOrder.length; i++) {
+      const baud = probeOrder[i];
+      const isLast = i === probeOrder.length - 1;
+      const result = await this.tryBaud(transport, baud, isValidLine);
+      if (result.matched || isLast) {
+        this.startReadLoop(transport, onLine, result.carryOverBuffer);
+        return baud;
+      }
+      await transport.close().catch(() => {});
     }
+    // Unreachable: probeOrder is always non-empty, so the isLast branch
+    // above always returns.
     return probeOrder[0];
   }
 
+  // Opens at `baud` and watches for a line matching `isValidLine` within
+  // PROBE_WINDOW_MS. Does not start the read loop or touch the port
+  // otherwise - the caller decides whether to keep this connection
+  // (start the read loop on it) or close it and try the next rate.
   private async tryBaud(
     transport: ByteTransport,
     baud: number,
     isValidLine: (line: string) => boolean,
-  ): Promise<boolean> {
+  ): Promise<{ matched: boolean; carryOverBuffer: string }> {
     await transport.open(baud);
 
     const decoder = new TextDecoder();
@@ -69,34 +108,30 @@ export class LineReader {
     let matched = false;
     const deadline = Date.now() + PROBE_WINDOW_MS;
 
-    try {
-      while (Date.now() < deadline) {
-        const remaining = deadline - Date.now();
-        const chunk = await Promise.race([
-          transport.read(),
-          new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), remaining)),
-        ]);
-        if (chunk === undefined) break; // timed out this iteration
-        if (chunk === null) break; // EOF
+    while (Date.now() < deadline) {
+      const remaining = deadline - Date.now();
+      const chunk = await Promise.race([
+        transport.read(),
+        new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), remaining)),
+      ]);
+      if (chunk === undefined) break; // timed out this iteration
+      if (chunk === null) break; // EOF
 
-        buffer += decoder.decode(chunk, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-        if (lines.some((line) => isValidLine(line))) {
-          matched = true;
-          break;
-        }
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      if (lines.some((line) => isValidLine(line))) {
+        matched = true;
+        break;
       }
-    } finally {
-      await transport.close().catch(() => {});
     }
-    return matched;
+
+    return { matched, carryOverBuffer: buffer };
   }
 
-  private async openAt(transport: ByteTransport, baud: number, onLine: LineHandler): Promise<void> {
-    await transport.open(baud);
+  private startReadLoop(transport: ByteTransport, onLine: LineHandler, carryOverBuffer: string): void {
     this.decoder = new TextDecoder();
-    this.lineBuffer = "";
+    this.lineBuffer = carryOverBuffer;
 
     this.readLoop = (async () => {
       try {

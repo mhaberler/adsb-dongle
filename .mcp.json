@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "jetbrains": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@jetbrains/mcp-proxy"
+      ],
+      "env": {}
+    }
+  }
+}
