@@ -24,7 +24,15 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install web dependencies
+      - name: Install webapp dependencies
+        # app/ imports the shared decode/map pipeline from ../webapp/src
+        # (see CLAUDE.md); its node_modules (leaflet, etc.) must exist
+        # too, since Node module resolution for those imports walks up
+        # from webapp/src, not from app/.
+        working-directory: webapp
+        run: bun install --frozen-lockfile
+
+      - name: Install app dependencies
         working-directory: app
         run: bun install --frozen-lockfile
 
