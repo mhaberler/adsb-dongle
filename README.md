@@ -129,6 +129,31 @@ duplication) and auto-detects both stream formats exactly like the
 webapp. Auto-launches and auto-connects when the FTDI adapter or the
 ESP32 dongle is plugged in.
 
+<img src="assets/WhatsApp%20Image%202026-08-31%20at%2017.16.35.jpeg" alt="Android app tracking 50 aircraft live" width="300">
+
+*Android app connected via the FTDI adapter, tracking 50 aircraft live*
+
+**App details**
+
+| | |
+|---|---|
+| Package (appId) | `io.github.mhaberler.adsbdongle` |
+| Display name | ADS-B Dongle |
+| Min Android version | 8.0 (API 24) |
+| Signing | debug-signed only (no Play Store release) |
+| Permissions | USB host, coarse/fine location (for the "my location" map marker) |
+
+### Install
+
+Download the latest debug APK from
+[Releases](https://github.com/mhaberler/adsb-dongle/releases/latest),
+copy it to the phone, and install it (you'll need to allow "install
+unknown apps" for whichever app you use to open the file — it's
+debug-signed, not from the Play Store). Then plug in the FTDI adapter
+(or the ESP32 dongle) — the app auto-launches and auto-connects.
+
+### Build from source
+
 ```sh
 cd app
 bun install
@@ -142,8 +167,8 @@ the debug APK and publishes it as a
 no local Android SDK needed. Triggered by pushing a `v*` tag:
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 (or run it manually via `workflow_dispatch` in the Actions tab, which
