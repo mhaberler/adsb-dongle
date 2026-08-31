@@ -8,18 +8,26 @@ import { AircraftStore } from "./aircraft-store";
 const connectBtn = document.querySelector<HTMLButtonElement>("#connect-btn")!;
 const connStatus = document.querySelector<HTMLSpanElement>("#conn-status")!;
 const statsEl = document.querySelector<HTMLDivElement>("#stats")!;
+const geoStatus = document.querySelector<HTMLSpanElement>("#geo-status")!;
 
 const map = new AircraftMap("map");
 const serial = new SerialLineReader();
 
 if ("geolocation" in navigator) {
   navigator.geolocation.watchPosition(
-    (pos) => map.setMyLocation(pos.coords.latitude, pos.coords.longitude),
-    () => {
-      // Permission denied or unavailable; silently skip the location marker.
+    (pos) => {
+      map.setMyLocation(pos.coords.latitude, pos.coords.longitude);
+      geoStatus.textContent = "";
     },
-    { enableHighAccuracy: true },
+    (err) => {
+      // PERMISSION_DENIED(1) / POSITION_UNAVAILABLE(2) / TIMEOUT(3).
+      // watchPosition keeps retrying on its own for 2/3; only 1 is final.
+      geoStatus.textContent = `location: ${err.message}`;
+    },
+    { enableHighAccuracy: false, maximumAge: 30000, timeout: 15000 },
   );
+} else {
+  geoStatus.textContent = "location: not supported";
 }
 
 type StreamMode = "unknown" | "ndjson" | "raw";
