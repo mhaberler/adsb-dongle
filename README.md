@@ -76,7 +76,20 @@ bun run build       # production build to webapp/dist
 bun test            # decoder unit tests (no hardware needed)
 ```
 
-Requires a Chromium-based browser (Web Serial isn't supported in Firefox/Safari).
+Requires a Chromium-based browser. On desktop this uses the
+[Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API)
+(not supported in Firefox/Safari). **Android Chrome has no Web Serial API
+at all**, so there the webapp falls back to
+[WebUSB](https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API) with
+two small hand-rolled drivers (`webapp/src/transport-ftdi.ts`,
+`webapp/src/transport-cdcacm.ts` — no external dependency): an FTDI
+FT230X/FT232R driver for the direct-wired module, and a CDC-ACM driver for
+the ESP32 dongle. The Connect button picks whichever API the browser has;
+no separate mode to choose. The FTDI path is the reliable one on Android —
+the CDC-ACM path only works if Android's own kernel `cdc_acm` driver
+hasn't already claimed the ESP32's interface, which fails with a clear
+"unable to claim interface" error when it happens (nothing the webapp can
+do about that from the browser).
 
 The webapp works with two kinds of serial source, auto-detected by line
 shape (no separate mode to pick):

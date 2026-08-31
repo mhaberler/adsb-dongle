@@ -12,6 +12,7 @@
   "devDependencies": {
     "@types/leaflet": "^1.9.22",
     "@types/w3c-web-serial": "^1.0.8",
+    "@types/w3c-web-usb": "^1.0.14",
     "bun-types": "^1.4.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.2"

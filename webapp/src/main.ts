@@ -1,5 +1,8 @@
 import "./style.css";
-import { SerialLineReader } from "./serial";
+import { LineReader, type ByteTransport } from "./transport";
+import { requestWebSerialTransport } from "./transport-webserial";
+import { FtdiTransport } from "./transport-ftdi";
+import { CdcAcmTransport } from "./transport-cdcacm";
 import { classifyLine, parseLine, parseRawFrame } from "./protocol";
 import type { StatsMessage } from "./protocol";
 import { AircraftMap } from "./map";
@@ -11,7 +14,33 @@ const statsEl = document.querySelector<HTMLDivElement>("#stats")!;
 const geoStatus = document.querySelector<HTMLSpanElement>("#geo-status")!;
 
 const map = new AircraftMap("map");
-const serial = new SerialLineReader();
+const lineReader = new LineReader();
+
+// Web Serial (navigator.serial) is desktop-only - Android Chrome has no
+// such API at all, so there we fall back to WebUSB with hand-rolled
+// FTDI and CDC-ACM drivers (transport-ftdi.ts, transport-cdcacm.ts).
+// Baud probe order favors the direct-wired module's 921600 on the WebUSB
+// path (Android + WebUSB almost always means the FTDI-adapted module, not
+// the ESP32 dongle) and the dongle's 115200 first on Web Serial (desktop).
+async function requestTransport(): Promise<{ transport: ByteTransport; probeOrder: number[] }> {
+  if (navigator.serial) {
+    return { transport: await requestWebSerialTransport(), probeOrder: [115200, 921600] };
+  }
+  if (navigator.usb) {
+    const device = await navigator.usb.requestDevice({
+      filters: [
+        { vendorId: 0x0403 }, // FTDI
+        { classCode: 0x02 }, // CDC comm interface
+        { classCode: 0xef }, // composite/IAD (covers most CDC-ACM boards)
+      ],
+    });
+    const transport: ByteTransport = FtdiTransport.matches(device)
+      ? new FtdiTransport(device)
+      : new CdcAcmTransport(device);
+    return { transport, probeOrder: [921600, 115200] };
+  }
+  throw new Error("No Web Serial or WebUSB support in this browser");
+}
 
 if ("geolocation" in navigator) {
   let geoFailStreak = 0;
@@ -114,7 +143,7 @@ function handleLine(line: string): void {
       // GNS5892 command interface: "#49-03<CR>" = DF17/18/19-only output
       // mode. Harmless no-op if this line actually came via an ESP32
       // pass-through rather than a directly-wired module.
-      void serial.write("#49-03\r");
+      void lineReader.write("#49-03\r");
     }
     handleRawLine(line);
 
@@ -152,14 +181,15 @@ function onDisconnect(): void {
 
 connectBtn.addEventListener("click", async () => {
   if (connectBtn.textContent === "Disconnect") {
-    await serial.disconnect();
+    await lineReader.disconnect();
     onDisconnect();
     return;
   }
 
   try {
     resetState();
-    await serial.connect(isRecognizedLine, handleLine, onDisconnect);
+    const { transport, probeOrder } = await requestTransport();
+    await lineReader.connect(transport, probeOrder, isRecognizedLine, handleLine, onDisconnect);
     setConnected(true);
   } catch (err) {
     connStatus.textContent = `error: ${(err as Error).message}`;

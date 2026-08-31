@@ -109,10 +109,50 @@ ASCII-hex Mode-S frames from a GNS5892R/Rextron module wired directly to a
 USB-UART adapter (921600 baud) — decoded **entirely in the browser**, no
 firmware involved.
 
-- **`serial.ts`**: Web Serial connect flow. Auto-probes baud (115200 then
-  921600, `PROBE_BAUD_RATES`) by opening the port and watching for a
-  recognizable line within `PROBE_WINDOW_MS` (2 s); reopens at whichever
-  rate matches. Also exposes `write()` for sending module commands.
+**Transport layer** (`transport.ts` + three `transport-*.ts` drivers):
+`navigator.serial` (Web Serial) exists only on desktop Chrome/Edge —
+**Android Chrome has no Web Serial API at all** — so `main.ts`
+`requestTransport()` falls back to WebUSB (`navigator.usb`) there:
+
+- **`transport.ts`**: `ByteTransport` interface (`open`/`close`/`read`/
+  `write`/`setOnDisconnect`) all three drivers implement, plus `LineReader`
+  — the transport-agnostic baud auto-probe (opens at each rate in the
+  caller-supplied `probeOrder`, watches `PROBE_WINDOW_MS` (2 s) for a line
+  matching `isValidLine`) and NDJSON/raw-frame line-splitting logic,
+  shared across all three transports.
+- **`transport-webserial.ts`**: thin `ByteTransport` wrapper around
+  `navigator.serial` (desktop). `requestWebSerialTransport()` calls
+  `requestPort()`.
+- **`transport-ftdi.ts`**: hand-rolled WebUSB driver for FTDI FT230X/
+  FT232R-family chips (the FTDI USB-UART adapter used to wire a module
+  directly, per README.md) — no vendor SDK, protocol is the well-known
+  open reverse-engineered one (same as Linux `ftdi_sio`/libftdi/pyftdi).
+  `ftdiBaudDivisor()` computes the SET_BAUDRATE vendor-request value/index
+  pair (48 MHz-base encode_baudrate algorithm; cross-checked against
+  FTDI's published AN232B-05 divisor table for the two rates this app
+  uses — 921600 → 0x8003, 115200 → 0x001A — see `transport-ftdi.test.ts`).
+  `stripFtdiStatusBytes()` removes the 2-byte modem-status header FTDI
+  prepends to **every** USB packet (every 64-byte stride within a bulk-IN
+  transfer, not just the start of the buffer).
+- **`transport-cdcacm.ts`**: WebUSB driver for USB CDC-ACM devices (this
+  repo's ESP32 dongle, `ARDUINO_USB_CDC_ON_BOOT`). Claims both the CDC
+  comm interface (class 2, for SET_LINE_CODING/SET_CONTROL_LINE_STATE)
+  and the CDC data interface (class 10, for bulk transfers); asserts
+  DTR+RTS on open, same as the Arduino CDC stack expects from a serial
+  monitor. **Caveat**: only works if Android's own kernel `cdc_acm`
+  driver hasn't already claimed the interface — if it has,
+  `claimInterface()` throws and that error propagates up to the
+  toolbar's connect-error display (`connStatus.textContent`) rather than
+  failing silently; nothing further can be done about it from the
+  browser (WebUSB can't detach a bound kernel driver).
+
+`main.ts` `requestTransport()`: Web Serial when present (desktop) →
+probe order `[115200, 921600]`; else WebUSB device picker filtered to
+FTDI vendor ID (0x0403), CDC comm class, or composite/IAD class, then
+`FtdiTransport.matches(device)` picks the FTDI driver vs. CDC-ACM →
+probe order `[921600, 115200]` (Android + WebUSB is assumed to mean the
+direct-wired module, not the dongle).
+
 - **`modes.ts`**: TypeScript port of the **decode half** of
   `lib/libmodes/src/mode-s.c` (CRC table + `mode_s_decode()`), restricted
   to DF17 + DF18 CF 0/1/2/6 (same scope as the firmware) — the demodulator
