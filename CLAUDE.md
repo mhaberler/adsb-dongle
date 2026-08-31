@@ -264,6 +264,9 @@ Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
   already the Capacitor-template default here, left unchanged.
 
 CI: `.github/workflows/android-apk.yml` builds a debug APK
-(`./gradlew assembleDebug` after `bun run sync`) on pushes touching
-`app/**` or `webapp/src/**`, uploaded as a workflow artifact. Debug-signed
-only, no release signing configured.
+(`./gradlew assembleDebug` after `bun run sync`), triggered by pushing a
+`v*` tag (`git tag v0.1.0 && git push origin v0.1.0`) — publishes the APK
+as a GitHub Release (`softprops/action-gh-release`) for a stable download
+link, plus always uploads it as a workflow artifact. `workflow_dispatch`
+also available for a manual run (artifact only, no release, since there's
+no tag). Debug-signed only, no release signing configured.

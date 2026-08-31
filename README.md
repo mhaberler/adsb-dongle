@@ -136,10 +136,19 @@ bun run sync        # build web assets + bunx cap sync android
 bun run android      # sync + bunx cap run android (needs a device/emulator)
 ```
 
-A GitHub Actions workflow (`.github/workflows/android-apk.yml`) builds a
-debug APK on every push touching `app/` or `webapp/src/` and uploads it
-as a build artifact — no local Android SDK needed to get an installable
-APK; download it from the workflow run.
+A GitHub Actions workflow (`.github/workflows/android-apk.yml`) builds
+the debug APK and publishes it as a
+[GitHub Release](https://github.com/mhaberler/adsb-dongle/releases) —
+no local Android SDK needed. Triggered by pushing a `v*` tag:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+(or run it manually via `workflow_dispatch` in the Actions tab, which
+still uploads the APK as a build artifact but skips the release step
+since there's no tag).
 
 ## More detail
 
