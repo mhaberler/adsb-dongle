@@ -18,8 +18,8 @@ body {
 
 #toolbar {
   position: absolute;
-  top: calc(12px + env(safe-area-inset-top, 0px));
-  right: calc(12px + env(safe-area-inset-right, 0px));
+  top: calc(12px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  right: calc(12px + var(--safe-area-inset-right, env(safe-area-inset-right, 0px)));
   z-index: 1000;
   background: rgba(255, 255, 255, 0.9);
   padding: 8px 12px;
@@ -38,8 +38,8 @@ body {
 
 #stats {
   position: absolute;
-  bottom: calc(32px + env(safe-area-inset-bottom, 0px));
-  right: calc(12px + env(safe-area-inset-right, 0px));
+  bottom: calc(32px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  right: calc(12px + var(--safe-area-inset-right, env(safe-area-inset-right, 0px)));
   z-index: 1000;
   background: rgba(255, 255, 255, 0.9);
   padding: 4px 8px;
@@ -75,4 +75,22 @@ body {
 .ac-popup {
   font-size: 12px;
   line-height: 1.4;
+}
+
+/* Leaflet pins its control containers to the physical viewport edges
+   (.leaflet-top{top:0}), so on edge-to-edge Android the zoom control lands
+   under the status bar. Offset the containers by the safe-area insets.
+   Leaflet's own stylesheet is bundled after this one, so these need higher
+   specificity than its bare .leaflet-top/.leaflet-left rules to win. */
+.leaflet-container .leaflet-top {
+  top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+}
+.leaflet-container .leaflet-bottom {
+  bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+}
+.leaflet-container .leaflet-left {
+  left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+}
+.leaflet-container .leaflet-right {
+  right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
 }

@@ -195,3 +195,16 @@ void UsbSerial.addListener("attached", () => void connect(true));
 void connect(true);
 
 void initGeolocation();
+
+// Capacitor 8.5.0 (@capacitor/android SystemBars) injects the
+// --safe-area-inset-* CSS variables before document.documentElement exists,
+// so the injection throws ("Error injecting safe area CSS: TypeError: Cannot
+// read properties of null") and the variables are never set — leaving the
+// toolbar under the status bar on edge-to-edge Android (targetSdk 36).
+// Re-trigger the injection now that the DOM is parsed.
+declare global {
+  interface Window {
+    CapacitorSystemBarsAndroidInterface?: { onDOMReady(): void };
+  }
+}
+window.CapacitorSystemBarsAndroidInterface?.onDOMReady();
