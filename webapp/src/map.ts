@@ -1,23 +1,28 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { AircraftMessage } from "./protocol";
+import { getAdsbColor } from "./altitude-color";
 
 const DEFAULT_CENTER: L.LatLngTuple = [0, 0];
 const DEFAULT_ZOOM = 3;
 const FIRST_AIRCRAFT_ZOOM = 9;
 
 // Inline SVG arrow, no external asset. Points north (track 0) by default;
-// rotated in place via CSS transform per-marker.
-const PLANE_SVG = `
+// rotated in place via CSS transform per-marker. Fill is the
+// ADSBexchange altitude colour ramp (see altitude-color.ts).
+function planeSvg(color: string): string {
+  return `
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-  <path d="M12 1 L17 14 L12 11 L7 14 Z" fill="#e63946" stroke="#7a1f26" stroke-width="0.5"/>
+  <path d="M12 1 L17 14 L12 11 L7 14 Z" fill="${color}" stroke="#333" stroke-width="0.5"/>
 </svg>`;
+}
 
-function planeIcon(track: number | undefined): L.DivIcon {
-  const rotation = track ?? 0;
+function planeIcon(ac: AircraftMessage): L.DivIcon {
+  const rotation = ac.track ?? 0;
+  const color = getAdsbColor(ac.alt_baro ?? ac.alt_geom);
   return L.divIcon({
     className: "plane-icon",
-    html: `<div style="transform: rotate(${rotation}deg);">${PLANE_SVG}</div>`,
+    html: `<div style="transform: rotate(${rotation}deg);">${planeSvg(color)}</div>`,
     iconSize: [24, 24],
     iconAnchor: [12, 12],
   });
@@ -97,10 +102,10 @@ export class AircraftMap {
     let marker = this.markers.get(ac.hex);
     if (marker) {
       marker.setLatLng(latlng);
-      marker.setIcon(planeIcon(ac.track));
+      marker.setIcon(planeIcon(ac));
       marker.setPopupContent(popupHtml(ac));
     } else {
-      marker = L.marker(latlng, { icon: planeIcon(ac.track) }).addTo(this.map);
+      marker = L.marker(latlng, { icon: planeIcon(ac) }).addTo(this.map);
       marker.bindPopup(popupHtml(ac));
       this.markers.set(ac.hex, marker);
     }
