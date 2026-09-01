@@ -9,10 +9,10 @@
     <div id="app">
       <div id="map"></div>
       <div id="toolbar">
-        <button id="connect-btn" type="button">Connect</button>
-        <span id="conn-status">disconnected</span>
-        <span id="geo-status"></span>
+        <button id="connect-btn" type="button" data-state="disconnected"
+                title="Connect" aria-label="Connect"></button>
       </div>
+      <div id="status-msg"></div>
       <div id="stats"></div>
     </div>
     <script type="module" src="./src/main.ts"></script>

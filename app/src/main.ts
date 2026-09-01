@@ -9,9 +9,23 @@ import { AircraftMap } from "../../webapp/src/map";
 import { AircraftStore } from "../../webapp/src/aircraft-store";
 
 const connectBtn = document.querySelector<HTMLButtonElement>("#connect-btn")!;
-const connStatus = document.querySelector<HTMLSpanElement>("#conn-status")!;
+const statusMsg = document.querySelector<HTMLDivElement>("#status-msg")!;
+
+let toastTimer: number | undefined;
+
+// Transient message over the map. Empty text hides it immediately.
+function toast(msg: string, ms = 4000): void {
+  window.clearTimeout(toastTimer);
+  if (!msg) {
+    statusMsg.classList.remove("show");
+    return;
+  }
+  statusMsg.textContent = msg;
+  statusMsg.classList.add("show");
+  toastTimer = window.setTimeout(() => statusMsg.classList.remove("show"), ms);
+}
 const statsEl = document.querySelector<HTMLDivElement>("#stats")!;
-const geoStatus = document.querySelector<HTMLSpanElement>("#geo-status")!;
+
 
 const map = new AircraftMap("map");
 const lineReader = new LineReader();
@@ -29,11 +43,11 @@ async function initGeolocation(): Promise<void> {
   try {
     const perm = await Geolocation.requestPermissions();
     if (perm.location !== "granted" && perm.coarseLocation !== "granted") {
-      geoStatus.textContent = "location: permission denied";
+      toast("location: permission denied");
       return;
     }
   } catch (err) {
-    geoStatus.textContent = `location: ${(err as Error).message}`;
+    toast(`location: ${(err as Error).message}`);
     return;
   }
 
@@ -44,12 +58,12 @@ async function initGeolocation(): Promise<void> {
       if (pos) {
         geoFailStreak = 0;
         map.setMyLocation(pos.coords.latitude, pos.coords.longitude);
-        geoStatus.textContent = "";
+        toast("");
         return;
       }
       geoFailStreak++;
       if (geoFailStreak >= 3) {
-        geoStatus.textContent = `location: ${err?.message ?? "unavailable"}`;
+        toast(`location: ${err?.message ?? "unavailable"}`);
       }
     },
   );
@@ -72,9 +86,22 @@ function renderStats(s: StatsMessage): void {
   ].join("\n");
 }
 
+type ConnState = "disconnected" | "connecting" | "connected" | "error";
+
+// The button is a bare colour swatch, so connection state lives here rather
+// than being inferred from its label.
+let connState: ConnState = "disconnected";
+
+function setState(state: ConnState): void {
+  connState = state;
+  connectBtn.dataset.state = state;
+  const label = state === "connected" ? "Disconnect" : "Connect";
+  connectBtn.title = label;
+  connectBtn.setAttribute("aria-label", label);
+}
+
 function setConnected(connected: boolean): void {
-  connStatus.textContent = connected ? "connected" : "disconnected";
-  connectBtn.textContent = connected ? "Disconnect" : "Connect";
+  setState(connected ? "connected" : "disconnected");
 }
 
 function handleNdjsonLine(line: string): void {
@@ -164,8 +191,9 @@ function onDisconnect(): void {
 }
 
 async function connect(silent: boolean): Promise<void> {
-  if (connecting || connectBtn.textContent === "Disconnect") return;
+  if (connecting || connState === "connected") return;
   connecting = true;
+  setState("connecting");
   try {
     resetState();
     const transport = await requestNativeTransport();
@@ -174,14 +202,19 @@ async function connect(silent: boolean): Promise<void> {
   } catch (err) {
     // Auto-connect attempts (startup, device-attach) stay quiet when
     // nothing is plugged in yet; a manual Connect click always reports.
-    if (!silent) connStatus.textContent = `error: ${(err as Error).message}`;
+    if (silent) {
+      setState("disconnected");
+    } else {
+      setState("error");
+      toast((err as Error).message);
+    }
   } finally {
     connecting = false;
   }
 }
 
 connectBtn.addEventListener("click", async () => {
-  if (connectBtn.textContent === "Disconnect") {
+  if (connState === "connected") {
     await lineReader.disconnect();
     onDisconnect();
     return;
