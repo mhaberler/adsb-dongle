@@ -158,14 +158,18 @@ export class LineReader {
     await this.cleanup();
   }
 
+  // Close the transport *before* awaiting the read loop: the loop is
+  // parked in transport.read(), which only resolves (null/EOF) once the
+  // port is closed. Awaiting it first deadlocks disconnect().
   private async cleanup(): Promise<void> {
+    const transport = this.transport;
+    this.transport = null;
+    if (transport) {
+      await transport.close().catch(() => {});
+    }
     if (this.readLoop) {
       await this.readLoop.catch(() => {});
       this.readLoop = null;
-    }
-    if (this.transport) {
-      await this.transport.close().catch(() => {});
-      this.transport = null;
     }
   }
 }
