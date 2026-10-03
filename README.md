@@ -64,8 +64,9 @@ decoder internals.
 
 `webapp/` is a browser-only ADS-B viewer: connects to the dongle over the
 [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API)
-(no server, no native app) and plots live aircraft on a Leaflet/OpenStreetMap
-map, styled after [airplanejs](https://github.com/watson/airplanejs). Built
+(no server, no native app) and plots live aircraft on a Leaflet map
+(OpenStreetMap or OpenTopoMap base, optional openflightmaps overlay,
+[cached for offline use](#map-layers-and-offline-cache)), styled after [airplanejs](https://github.com/watson/airplanejs). Built
 with Vite + vanilla TypeScript.
 
 ```sh
@@ -115,6 +116,37 @@ plugged in.
 
 *Directly decoding hex messages in-browser*
 
+### Map layers and offline cache
+
+The layer switcher (top left) offers two base maps —
+[OpenStreetMap](https://www.openstreetmap.org) (default) and
+[OpenTopoMap](https://opentopomap.org) — plus an
+[openflightmaps](https://www.openflightmaps.org) aeronautical overlay.
+The selection is remembered across reloads.
+
+Map tiles are cached in the browser (IndexedDB, via
+[`leaflet.offline`](https://github.com/allartk/leaflet.offline)) so the
+map keeps working without a network connection:
+
+- **Passive**: every tile viewed while online is stored.
+- **Preload (⤓)**: downloads the current viewport for all visible layers,
+  from the current zoom up to each layer's highest stored zoom (12; 11
+  for the aero overlay), after confirming the tile count and estimated
+  size. Refused above 5000 tiles per layer — zoom in and try again.
+  Already-stored base tiles are skipped; aero overlay tiles are always
+  refetched, since that data goes stale.
+- **Delete (✕)**: wipes the whole cache. Nothing expires on its own.
+
+Zooming in past the stored zoom upscales tiles rather than fetching
+finer ones, so the map looks the same online and offline. The status
+line (bottom left) shows the number of cached tiles and the date of the
+last complete aero overlay preload.
+
+Preloading is meant for the area you are about to operate in, not for
+bulk downloads — please respect the tile providers' usage policies. The
+openflightmaps tile URL is the one their own web map uses, not a
+documented API, and may change.
+
 ## Android app
 
 `app/` is a Capacitor-wrapped Android app for when WebUSB doesn't work
@@ -127,7 +159,9 @@ instead of any browser API — Android-only, no iOS target. It imports the
 shared decode/map pipeline directly from `webapp/src/` (no code
 duplication) and auto-detects both stream formats exactly like the
 webapp. Auto-launches and auto-connects when the FTDI adapter or the
-ESP32 dongle is plugged in.
+ESP32 dongle is plugged in. The map layers and offline tile cache
+[described above](#map-layers-and-offline-cache) work identically in the
+app — preload the area before going out of coverage.
 
 <img src="assets/WhatsApp%20Image%202026-08-31%20at%2017.16.35.jpeg" alt="Android app tracking 50 aircraft live" width="300">
 

@@ -92,7 +92,8 @@ with a GNS5892R module (see README.md for datasheet link).
 
 Browser-only ADS-B map viewer — Vite + vanilla TypeScript, bun package
 manager, no server. Connects over the Web Serial API and plots aircraft on
-a Leaflet/OSM map (`webapp/src/map.ts`).
+a Leaflet map (`webapp/src/map.ts`; OSM/OpenTopoMap bases + openflightmaps
+overlay, tiles cached offline — see `tile-cache.ts` below).
 
 ```sh
 cd webapp
@@ -224,10 +225,14 @@ library is Android-only).
 It has its own `package.json`/`vite.config.ts`/`index.html`/`src/main.ts`,
 but imports the shared decode/map pipeline straight from `../webapp/src`
 (`transport.ts`, `protocol.ts`, `modes.ts`, `cpr.ts`, `aircraft-store.ts`,
-`map.ts` — via relative imports, `app/tsconfig.json` `include`s
-`../webapp/src` and `app/vite.config.ts` widens dev-server `fs.allow` to
-reach it). **`webapp/` itself is never modified for the app** — the app
-only reads from it. `app/src/style.css` is a copy of webapp's (plus
+`map.ts`, and through it `tile-cache.ts` — via relative imports,
+`app/tsconfig.json` `include`s `../webapp/src` and `app/vite.config.ts`
+widens dev-server `fs.allow` to reach it). Modules under `../webapp/src`
+resolve bare imports from `app/node_modules`, so any dependency they use
+(`leaflet`, `leaflet.offline`) must be listed in **both** `package.json`s.
+**`webapp/` itself is never modified for the app** — the app
+only reads from it. `app/src/style.css` is a copy of webapp's — CSS added
+there (e.g. `.tile-status`) must be copied over by hand — (plus
 `env(safe-area-inset-*)` padding for the toolbar/stats since this runs
 edge-to-edge in a native shell), and `app/src/main.ts` is a copy of
 webapp's `main.ts` with the transport section and geolocation source
