@@ -2,6 +2,17 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { AircraftMessage } from "./protocol";
 import { getAdsbColor } from "./altitude-color";
+import {
+  MAX_TILES_PER_LAYER,
+  cacheSummary,
+  clearAll,
+  makeLayers,
+  planPreload,
+  runPreload,
+} from "./tile-cache";
+import type { CachedLayer } from "./tile-cache";
+
+const LAYERS_KEY = "adsb.layers";
 
 const DEFAULT_CENTER: L.LatLngTuple = [0, 0];
 const DEFAULT_ZOOM = 3;
@@ -61,13 +72,105 @@ export class AircraftMap {
   private hasFitFirstAircraft = false;
   private myLocationMarker: L.Marker | null = null;
   private hasFitMyLocation = false;
+  private layers = makeLayers();
 
   constructor(containerId: string) {
     this.map = L.map(containerId).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap contributors",
-      maxZoom: 19,
-    }).addTo(this.map);
+    this.setupLayers();
+    this.setupCacheControls();
+    void navigator.storage?.persist?.();
+  }
+
+  // Base/overlay switcher; selection survives reloads via localStorage.
+  private setupLayers(): void {
+    let selected: string[] = ["osm"];
+    try {
+      const saved = localStorage.getItem(LAYERS_KEY);
+      if (saved) selected = JSON.parse(saved);
+    } catch {
+      // storage unavailable or corrupt: default layer
+    }
+    if (!this.layers.some((cl) => !cl.def.overlay && selected.includes(cl.def.id))) {
+      selected.push("osm");
+    }
+
+    const bases: Record<string, L.Layer> = {};
+    const overlays: Record<string, L.Layer> = {};
+    for (const cl of this.layers) {
+      (cl.def.overlay ? overlays : bases)[cl.def.name] = cl.layer;
+      if (selected.includes(cl.def.id)) cl.layer.addTo(this.map);
+    }
+    L.control.layers(bases, overlays, { position: "topleft" }).addTo(this.map);
+
+    this.map.on("baselayerchange overlayadd overlayremove", () => {
+      try {
+        const ids = this.activeLayers().map((cl) => cl.def.id);
+        localStorage.setItem(LAYERS_KEY, JSON.stringify(ids));
+      } catch {
+        // ignore
+      }
+    });
+  }
+
+  private activeLayers(): CachedLayer[] {
+    return this.layers.filter((cl) => this.map.hasLayer(cl.layer));
+  }
+
+  // Preload/clear buttons plus a one-line cache status, as Leaflet controls.
+  private setupCacheControls(): void {
+    const status = L.DomUtil.create("div", "tile-status");
+    const statusControl = new L.Control({ position: "bottomleft" });
+    statusControl.onAdd = () => status;
+    statusControl.addTo(this.map);
+    const showSummary = (suffix = "") =>
+      cacheSummary()
+        .then((s) => (status.textContent = s + suffix))
+        .catch(() => (status.textContent = "cache unavailable"));
+    void showSummary();
+
+    let busy = false;
+    const preload = async () => {
+      if (busy) return;
+      const plan = planPreload(this.map, this.activeLayers());
+      const counts = plan.items
+        .map((it) => `${it.cl.def.id} ${it.count}`)
+        .join(" + ");
+      if (plan.overCap) {
+        alert(`Too many tiles (${counts}; max ${MAX_TILES_PER_LAYER} per layer). Zoom in.`);
+        return;
+      }
+      if (!confirm(`Preload ${counts} tiles (~${Math.ceil(plan.estMb)} MB)?`)) return;
+      busy = true;
+      const failed = await runPreload(plan, (done, total) => {
+        status.textContent = `tiles ${done}/${total}`;
+      });
+      busy = false;
+      void showSummary(failed ? ` · ${failed} failed` : "");
+    };
+    const clear = async () => {
+      if (busy || !confirm("Delete all cached map tiles?")) return;
+      await clearAll();
+      void showSummary();
+    };
+
+    const bar = L.DomUtil.create("div", "leaflet-bar");
+    const button = (text: string, title: string, onClick: () => void) => {
+      const a = L.DomUtil.create("a", "", bar);
+      a.href = "#";
+      a.textContent = text;
+      a.title = title;
+      a.setAttribute("role", "button");
+      L.DomEvent.on(a, "click", (e) => {
+        L.DomEvent.preventDefault(e);
+        onClick();
+      });
+    };
+    button("⤓", "Preload visible area for offline use", () => void preload());
+    button("✕", "Delete cached map tiles", () => void clear());
+    L.DomEvent.disableClickPropagation(bar);
+    const barControl = new L.Control({ position: "topleft" });
+    barControl.onAdd = () => bar;
+    barControl.addTo(this.map);
   }
 
   setMyLocation(lat: number, lon: number): void {

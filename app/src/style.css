@@ -135,3 +135,13 @@ body {
 .leaflet-container .leaflet-right {
   right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
 }
+
+/* Offline tile cache status line (map.ts setupCacheControls). */
+.tile-status {
+  background: rgba(255, 255, 255, 0.9);
+  padding: 2px 6px;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  font-size: 10px;
+  font-family: ui-monospace, Consolas, monospace;
+}

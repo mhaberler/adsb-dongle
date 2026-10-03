@@ -21,6 +21,7 @@
     "@capacitor/core": "^8.5.1",
     "@capacitor/geolocation": "^8.2.2",
     "@leeskies/capacitor-usb-serial": "^0.2.0",
-    "leaflet": "^1.9.4"
+    "leaflet": "^1.9.4",
+    "leaflet.offline": "^3.2.1"
   }
 }
