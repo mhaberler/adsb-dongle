@@ -174,6 +174,25 @@ direct-wired module, not the dongle).
   rendering pipeline. Unlike the firmware there's no per-aircraft publish
   throttle (browser has no serial-bandwidth constraint); marker updates
   happen on every decoded frame.
+- **`tile-cache.ts`** (used only by `map.ts`, so the Android app gets it
+  too): offline tile cache on top of
+  [`leaflet.offline`](https://github.com/allartk/leaflet.offline)
+  (IndexedDB db `leaflet.offline`). `LAYER_DEFS`: bases OSM (default) and
+  OpenTopoMap, overlay openflightmaps aero — selection persisted in
+  `localStorage` (`adsb.layers`), switched via a stock `L.control.layers`.
+  Every layer has `maxNativeZoom` = its `nativeMax` (12; OFM 11), so higher
+  zooms are upscaled rather than fetched — keeps offline and online
+  behaviour identical. Tiles viewed online are stored passively
+  (`tileload` hook). The preload button (`map.ts` `setupCacheControls`)
+  downloads the current viewport for all visible layers from the current
+  zoom to `nativeMax`, 4 concurrent, refused above
+  `MAX_TILES_PER_LAYER` (5000); stored base tiles are skipped, overlay
+  tiles always refetched (aero data goes stale — date of last complete
+  overlay preload shown in the status line, kept in `localStorage`
+  `adsb.aeroPreloadedAt`). No expiry: the delete button wipes everything.
+  The library's own `savetiles` control is not used (single-layer only).
+  The OFM tile URL is the one openflightmaps' own web map uses, not a
+  documented API.
 - In raw mode, `main.ts` sends `#49-03\r` once on connect (GNS5892 command
   interface: DF17/18/19-only output mode) to cut the short-frame (DF4/5/
   20/21) traffic the module emits by default — harmless no-op if the
