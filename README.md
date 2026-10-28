@@ -66,7 +66,8 @@ decoder internals.
 [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API)
 (no server, no native app) and plots live aircraft on a Leaflet map
 (OpenStreetMap or OpenTopoMap base, optional openflightmaps overlay,
-[cached for offline use](#map-layers-and-offline-cache)), styled after [airplanejs](https://github.com/watson/airplanejs). Built
+[cached for offline use](#map-layers-and-offline-cache)) with
+[trails, labels, range rings and lead vectors](#aircraft-display), styled after [airplanejs](https://github.com/watson/airplanejs). Built
 with Vite + vanilla TypeScript.
 
 ```sh
@@ -74,7 +75,7 @@ cd webapp
 bun install
 bun dev             # http://localhost:5173, click Connect and pick the dongle's serial port
 bun run build       # production build to webapp/dist
-bun test            # decoder unit tests (no hardware needed)
+bun test            # decoder + geo unit tests (no hardware needed)
 ```
 
 Requires a Chromium-based browser. On desktop this uses the
@@ -115,6 +116,31 @@ plugged in.
 ![Directly decoding hex messages in-browser](assets/Screenshot%202026-08-31%20at%2009.23.21.png)
 
 *Directly decoding hex messages in-browser*
+
+### Aircraft display
+
+Each aircraft is an arrow pointing along its track, coloured by altitude
+(ADSBexchange colour ramp). Click it for a popup with the decoded fields,
+the country of registration (flag + name, derived from the ICAO address
+block) and the distance from your own location.
+
+- **Trails**: the reported positions (last 300 per aircraft), coloured in
+  1000 ft altitude bands, so climbs and descents show as colour steps.
+- **Dead reckoning**: between position reports the arrow moves on along
+  track at ground speed (for at most 30 s), so it doesn't jump.
+- **Labels**: callsign (or ICAO address) and flight level, with ↑/↓ while
+  climbing or descending.
+- **Range rings**: 50/100/200 km around your location, once the browser
+  (or app) has a location fix.
+- **Lead vector** (off/1/2/5/10 min): dashed arrow to where the aircraft
+  will be after that time at its current track and speed.
+
+Trails, labels, range rings and the lead vector are switched in the
+layer switcher (below the map layers); the choice is remembered across
+reloads. Flags use the bundled
+[Twemoji Country Flags](https://github.com/talkjs/country-flag-emoji-polyfill)
+font (Twemoji art, CC-BY 4.0 — see `webapp/src/vendor/twemoji-flags/LICENSE.md`)
+so they also render on Windows, which has no flag emoji.
 
 ### Map layers and offline cache
 
@@ -159,7 +185,8 @@ instead of any browser API — Android-only, no iOS target. It imports the
 shared decode/map pipeline directly from `webapp/src/` (no code
 duplication) and auto-detects both stream formats exactly like the
 webapp. Auto-launches and auto-connects when the FTDI adapter or the
-ESP32 dongle is plugged in. The map layers and offline tile cache
+ESP32 dongle is plugged in. The [aircraft display](#aircraft-display),
+map layers and offline tile cache
 [described above](#map-layers-and-offline-cache) work identically in the
 app — preload the area before going out of coverage.
 

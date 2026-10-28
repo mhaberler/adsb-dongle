@@ -100,7 +100,7 @@ cd webapp
 bun install
 bun dev             # http://localhost:5173
 bun run build       # tsc + vite build -> webapp/dist
-bun test            # decoder unit tests, no hardware needed
+bun test            # decoder + geo unit tests, no hardware needed
 ```
 
 **Two input modes, auto-detected by first line character** (`webapp/src/main.ts`
@@ -204,6 +204,32 @@ direct-wired module, not the dongle).
   `lib/libmodes/src/mode-s.c` directly on the same frames (see git history
   for the one-off comparison script) — confirms bit-level parity with the
   firmware decoder, not just internal self-consistency.
+- **`map.ts`** (`AircraftMap`): one `Track` per ICAO address — marker
+  (one `L.divIcon` for its whole life; rotation, fill colour and label are
+  patched into its DOM element per update, not rebuilt), trail polylines,
+  dead-reckoning tail and lead vector. Trails are split into runs per
+  1000 ft altitude band (`TRAIL_BAND_FT`, one polyline per run, coloured
+  via `getAdsbColor`), capped at `TRAIL_MAX_POINTS` (300) by trimming the
+  first run; a new point is only added when lat/lon changed (in raw mode
+  `upsert` runs on every frame). Dead reckoning: a 250 ms timer moves each
+  marker from the last fix along `track` at `gs` for
+  `min(DR_MAX_S, seen_pos + time since receipt)`; `rxMs` is
+  `performance.now()` at `upsert`. Popup content is a function
+  (`popupHtml`), refreshed via `getPopup().update()` only while open.
+  View options (trails/labels/range rings/lead minutes) live in a section
+  appended to the stock layer switcher's panel (`setupViewControls`),
+  persisted in `localStorage` `adsb.view`; labels are hidden via a
+  `no-labels` class on the map container. Range rings (`RINGS_KM`) follow
+  `setMyLocation`. The Twemoji flag font is registered from TS via
+  `FontFace` (so the app gets it without CSS changes); the `.flag`,
+  `.plane-label`, `.ring-label` and view-option CSS is in both style.css
+  files.
+- **`geo.ts`**: spherical great-circle helpers (`destPoint`, `distanceKm`),
+  tested in `geo.test.ts`.
+- **`icao-country.ts`**: ICAO address block → ISO country code, English
+  name (`Intl.DisplayNames`) and flag emoji; table from tar1090's
+  `flags.js`, first match wins (overlapping blocks ordered specific-first).
+  Tested in `icao-country.test.ts`.
 
 Deliberately out of scope for the raw-frame decoder (matches firmware):
 DF4/5/20/21 short frames, ME31 subtype 1 (surface), position-derived
@@ -225,14 +251,14 @@ library is Android-only).
 It has its own `package.json`/`vite.config.ts`/`index.html`/`src/main.ts`,
 but imports the shared decode/map pipeline straight from `../webapp/src`
 (`transport.ts`, `protocol.ts`, `modes.ts`, `cpr.ts`, `aircraft-store.ts`,
-`map.ts`, and through it `tile-cache.ts` — via relative imports,
+`map.ts`, and through it `tile-cache.ts`, `geo.ts`, `icao-country.ts` — via relative imports,
 `app/tsconfig.json` `include`s `../webapp/src` and `app/vite.config.ts`
 widens dev-server `fs.allow` to reach it). Modules under `../webapp/src`
 resolve bare imports from `app/node_modules`, so any dependency they use
 (`leaflet`, `leaflet.offline`) must be listed in **both** `package.json`s.
 **`webapp/` itself is never modified for the app** — the app
 only reads from it. `app/src/style.css` is a copy of webapp's — CSS added
-there (e.g. `.tile-status`) must be copied over by hand — (plus
+there (e.g. `.tile-status`, the aircraft label/flag/view-option rules) must be copied over by hand — (plus
 `env(safe-area-inset-*)` padding for the toolbar/stats since this runs
 edge-to-edge in a native shell), and `app/src/main.ts` is a copy of
 webapp's `main.ts` with the transport section and geolocation source
