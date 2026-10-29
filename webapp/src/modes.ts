@@ -29,7 +29,7 @@ const MODE_S_CHECKSUM_TABLE: number[] = [
   0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000, 0x000000,
 ];
 
-function modeSChecksum(msg: Uint8Array, bits: number): number {
+export function modeSChecksum(msg: Uint8Array, bits: number): number {
   let crc = 0;
   const offset = bits === 112 ? 0 : 112 - 56;
   for (let j = 0; j < bits; j++) {
@@ -95,6 +95,7 @@ export interface ModeSMessage {
   altitude?: number;
   rawLatitude?: number;
   rawLongitude?: number;
+  nicB?: number; // ME bit 8: NIC supplement-B (v2), single-antenna flag (v0/1)
 
   // ME19 sub 1-4: velocity
   velocity?: number;
@@ -109,6 +110,7 @@ export interface ModeSMessage {
   // ME31 sub 0: operational status (version 1/2 only)
   opstatusValid?: boolean;
   opstatusVersion?: number;
+  nicA?: number;
   nacP?: number;
   gva?: number;
   nicBaro?: number;
@@ -178,6 +180,7 @@ export function decodeModeS(msg: Uint8Array): ModeSMessage | null {
     mm.altitude = decodeAc12Field(msg);
     mm.rawLatitude = ((msg[6] & 3) << 15) | (msg[7] << 7) | (msg[8] >> 1);
     mm.rawLongitude = ((msg[8] & 1) << 16) | (msg[9] << 8) | msg[10];
+    mm.nicB = meGetBit(msg, 8); // (patch: firmware)
   } else if (metype === 19 && mesub >= 1 && mesub <= 4) {
     if (mesub === 1 || mesub === 2) {
       const ewDir = (msg[5] & 4) >> 2;
@@ -213,6 +216,7 @@ export function decodeModeS(msg: Uint8Array): ModeSMessage | null {
     mm.opstatusVersion = version;
     if (version === 1 || version === 2) {
       mm.opstatusValid = true;
+      mm.nicA = meGetBit(msg, 44);
       mm.nacP = meGetBits(msg, 45, 48);
       mm.sil = meGetBits(msg, 51, 52);
       if (version === 1) {

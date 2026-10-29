@@ -24,7 +24,7 @@ const EMERGENCY_NAMES = [
 interface AircraftState {
   icao: number;
   flight?: string;
-  category?: number;
+  category?: number; // readsb-style emitter category byte, e.g. 0xa3
   altBaro?: number;
   altGeom?: number;
   gs?: number;
@@ -42,6 +42,8 @@ interface AircraftState {
   nicBaro?: number;
   sil?: number;
   silType?: number;
+  nicA?: number;
+  nic?: number;
 
   evenValid: boolean;
   oddValid: boolean;
@@ -54,6 +56,39 @@ interface AircraftState {
 
   lastSeenMs: number;
   messages: number;
+}
+
+// NIC (0-11) of an airborne position from its type code and the NIC
+// supplements - port of src/nic.h adsb_compute_nic(), see there; keep in
+// sync. version/nicA as last seen in ME31 (0 if not yet), nicB = ME bit 8
+// of the position message.
+export function computeNic(metype: number, version: number, nicA: number, nicB: number): number {
+  switch (metype) {
+    case 9:
+      return 11;
+    case 10:
+      return 10;
+    case 11:
+      if (version === 2) return nicA && nicB ? 9 : 8;
+      if (version === 1) return nicA ? 9 : 8;
+      return 8;
+    case 12:
+      return 7;
+    case 13:
+      return 6;
+    case 14:
+      return 5;
+    case 15:
+      return 4;
+    case 16:
+      if (version === 2) return nicA && nicB ? 3 : 2;
+      if (version === 1) return nicA ? 3 : 2;
+      return 2;
+    case 17:
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 export type StoreEvent =
@@ -142,7 +177,9 @@ export class AircraftStore {
   private applyMessage(ac: AircraftState, mm: ModeSMessage, now: number): void {
     if (mm.metype >= 1 && mm.metype <= 4) {
       ac.flight = mm.flight;
-      ac.category = mm.aircraftType;
+      // Emitter category as readsb encodes it: set A-D from type code
+      // 4-1 in the high nibble, ME bits 6-8 (mesub) in the low one.
+      ac.category = ((0x0e - mm.metype) << 4) | mm.mesub;
     } else if (mm.metype >= 9 && mm.metype <= 18) {
       ac.altBaro = mm.altitude;
 
@@ -164,6 +201,7 @@ export class AircraftStore {
           ac.lat = pos.lat;
           ac.lon = pos.lon;
           ac.seenPosMs = now;
+          ac.nic = computeNic(mm.metype, ac.navVersion ?? 0, ac.nicA ?? 0, mm.nicB ?? 0);
         }
       }
     } else if (mm.metype === 19 && mm.mesub! >= 1 && mm.mesub! <= 4) {
@@ -180,6 +218,7 @@ export class AircraftStore {
       }
     } else if (mm.metype === 31 && mm.mesub === 0 && mm.opstatusValid) {
       ac.navVersion = mm.opstatusVersion;
+      if (mm.nicA !== undefined) ac.nicA = mm.nicA;
       if (mm.nacP !== undefined) ac.nacP = mm.nacP;
       if (mm.gva !== undefined) ac.gva = mm.gva;
       if (mm.nicBaro !== undefined) ac.nicBaro = mm.nicBaro;
@@ -200,7 +239,7 @@ export class AircraftStore {
       messages: ac.messages,
     };
     if (ac.flight !== undefined) msg.flight = ac.flight;
-    if (ac.category !== undefined) msg.category = ac.category;
+    if (ac.category !== undefined) msg.category = ac.category.toString(16).toUpperCase();
     if (ac.altBaro !== undefined) msg.alt_baro = ac.altBaro;
     if (ac.altGeom !== undefined) msg.alt_geom = ac.altGeom;
     if (ac.gs !== undefined) msg.gs = ac.gs;
@@ -214,6 +253,7 @@ export class AircraftStore {
       msg.lat = ac.lat;
       msg.lon = ac.lon;
       msg.seen_pos = (now - ac.seenPosMs!) / 1000;
+      if (ac.nic !== undefined) msg.nic = ac.nic;
     }
     if (ac.navVersion !== undefined) {
       msg.version = ac.navVersion;

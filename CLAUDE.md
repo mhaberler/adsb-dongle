@@ -27,7 +27,10 @@ pio device monitor     # serial monitor (115200 baud) — NDJSON output appears 
 pio run -t upload -t monitor   # flash then monitor
 ```
 
-No test suite in this repo.
+No firmware test suite. The webapp has bun unit tests (`cd webapp && bun
+test`, see below) that also cover the firmware's decode logic through its
+TypeScript port; `src/nic.h` has no Arduino dependency and can be compiled
+on the host with `cc` to compare against it.
 
 ## Architecture
 
@@ -55,8 +58,16 @@ aircraft table + publish), all in `src/adsb.cpp`.
   skipped. Local patches (documented in a comment at the top of
   `lib/libmodes/include/mode-s.h`): DF18 aliased into the DF17 ME-decode
   path, geometric-altitude delta (ME19), Operational Status fields (ME31
-  subtype 0), and emergency/squawk (ME28 subtype 1). CRC is check-only —
-  no bit-error correction.
+  subtype 0), emergency/squawk (ME28 subtype 1), and NIC-B (ME bit 8 of
+  airborne positions). CRC is check-only — no bit-error correction.
+- **NIC** (`src/nic.h`, header-only, plain C): `adsb_compute_nic()` turns
+  the position type code plus NIC-A (from ME31) and NIC-B into the
+  position's integrity category, same mapping as readsb's
+  `compute_nic()`; computed when a CPR pair solves, published as `nic`.
+  Mirrored in `webapp/src/aircraft-store.ts` `computeNic()` — keep both in
+  sync (the webapp's `nav.test.ts` covers the TS side; the C side can be
+  compared on the host by compiling `nic.h` with `cc`, it has no
+  Arduino dependency).
 - **CPR position solve**: `src/cpr.c`/`src/cpr.h` — readsb's CPR solver
   ported verbatim (GPL-3). Only `decodeCPRairborne()` (global, even/odd
   frame pair) is used — no receiver-reference-position / local CPR, since
@@ -69,9 +80,13 @@ aircraft table + publish), all in `src/adsb.cpp`.
   publish (on-change, not a fixed heartbeat) — mirrors readsb's
   `aircraft.json` field names (`hex`, `flight`, `category`, `alt_baro`,
   `alt_geom`, `gs`, `track`, `baro_rate`, `squawk`, `emergency`, `lat`,
-  `lon`, `seen_pos`, `version`, `nic_baro`, `nac_p`, `sil`, `sil_type`,
-  `gva`, `seen`, `messages`); fields are omitted, not zero-filled, until
-  decoded at least once.
+  `lon`, `seen_pos`, `nic`, `version`, `nic_baro`, `nac_p`, `sil`,
+  `sil_type`, `gva`, `seen`, `messages`); fields are omitted, not
+  zero-filled, until decoded at least once. `category` is readsb's
+  emitter category string (`"A3"`: set A-D from type code 4-1, plus ME
+  bits 6-8 = libmodes' `mesub`); firmware before that sent the bare
+  number `metype - 1`, which the webapp still accepts (shown as the
+  generic arrow).
 - **Stats**: `adsb_get_stats()`/`AdsbStats` (declared in `src/adsb.hpp`)
   expose frame/decode/drop counters and live aircraft count; published as
   their own NDJSON line every 5 s from `adsb_loop()`.
@@ -100,7 +115,7 @@ cd webapp
 bun install
 bun dev             # http://localhost:5173
 bun run build       # tsc + vite build -> webapp/dist
-bun test            # decoder + geo unit tests, no hardware needed
+bun test            # decoder, NIC, display + geo unit tests, no hardware needed
 ```
 
 **Two input modes, auto-detected by first line character** (`webapp/src/main.ts`
@@ -159,8 +174,8 @@ direct-wired module, not the dongle).
   to DF17 + DF18 CF 0/1/2/6 (same scope as the firmware) — the demodulator
   code (`mode_s_detect`, magnitude vectors) is not ported since input
   frames arrive already framed, same as the firmware. Carries the same
-  four local patches as `lib/libmodes` (DF18 aliasing, ME19 geo−baro
-  delta, ME31 opstatus fields, ME28 emergency/squawk) — see comment block
+  local patches as `lib/libmodes` (DF18 aliasing, ME19 geo−baro
+  delta, ME31 opstatus fields, ME28 emergency/squawk, NIC-B) — see comment block
   at top of `lib/libmodes/include/mode-s.h` for patch details, which apply
   identically here. CRC is check-only, matching firmware config
   (`fix_errors=0`, `aggressive=0`).
@@ -224,6 +239,15 @@ direct-wired module, not the dongle).
   `FontFace` (so the app gets it without CSS changes); the `.flag`,
   `.plane-label`, `.ring-label` and view-option CSS is in both style.css
   files.
+- **`aircraft-shapes.ts`**: marker SVG per emitter category (`shapeOf`;
+  jet/heavy/light/glider/heli/balloon/drone/ground, `arrow` for unknown,
+  A0 and old numeric categories). The marker keeps one icon until the
+  shape changes (category usually arrives after the first position).
+- **`gnss.ts`**: `gnssQuality()` — `ok`/`degraded`/`unusable` from `nic`
+  and `nac_p` (version ≥ 1): degraded below NIC 7 or NACp 8, unusable at 0;
+  NACp alone if `nic` is missing (older firmware). `map.ts` draws trail
+  runs keyed `"gnss"` red dashed while degraded and shows a bottom-left
+  status line with the share of degraded aircraft (hidden when none).
 - **`geo.ts`**: spherical great-circle helpers (`destPoint`, `distanceKm`),
   tested in `geo.test.ts`.
 - **`icao-country.ts`**: ICAO address block → ISO country code, English
@@ -232,8 +256,9 @@ direct-wired module, not the dongle).
   Tested in `icao-country.test.ts`.
 
 Deliberately out of scope for the raw-frame decoder (matches firmware):
-DF4/5/20/21 short frames, ME31 subtype 1 (surface), position-derived
-NIC/RC, bit-error correction.
+DF4/5/20/21 short frames, ME31 subtype 1 (surface), surface (TC 5-8) and
+GNSS-height (TC 20-22) positions, containment radius (Rc), bit-error
+correction.
 
 ## Android app (`app/`)
 
