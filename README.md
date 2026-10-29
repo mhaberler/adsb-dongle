@@ -15,12 +15,12 @@ TTL UART at a fixed 921600 8N1, no flow control.
 
 ## Wiring
 
-| Module pin | ESP32-C6 GPIO |
-|---|---|
-| 3V3 | 3V3 |
-| GND | GND |
-| TxD (module out) | GPIO19 (RX) |
-| RxD (module in)  | GPIO5 (TX) |
+| Module pin       | ESP32-C6 GPIO |
+| ---------------- | ------------- |
+| 3V3              | 3V3           |
+| GND              | GND           |
+| TxD (module out) | GPIO19 (RX)   |
+| RxD (module in)  | GPIO5 (TX)    |
 
 ## Build / flash / monitor
 
@@ -190,19 +190,19 @@ map layers and offline tile cache
 [described above](#map-layers-and-offline-cache) work identically in the
 app — preload the area before going out of coverage.
 
-<img src="assets/WhatsApp%20Image%202026-08-31%20at%2017.16.35.jpeg" alt="Android app tracking 50 aircraft live" width="300">
+<img src="assets/android-app.jpeg" alt="Android app tracking aircraft live" width="300">
 
-*Android app connected via the FTDI adapter, tracking 50 aircraft live*
+*Android app connected via the FTDI adapter, tracking aircraft live*
 
 **App details**
 
-| | |
-|---|---|
-| Package (appId) | `io.github.mhaberler.adsbdongle` |
-| Display name | ADS-B Dongle |
-| Min Android version | 8.0 (API 24) |
-| Signing | debug-signed only (no Play Store release) |
-| Permissions | USB host, coarse/fine location (for the "my location" map marker) |
+|                     |                                                                   |
+| ------------------- | ----------------------------------------------------------------- |
+| Package (appId)     | `io.github.mhaberler.adsbdongle`                                  |
+| Display name        | ADS-B Dongle                                                      |
+| Min Android version | 8.0 (API 24)                                                      |
+| Signing             | debug-signed only (no Play Store release)                         |
+| Permissions         | USB host, coarse/fine location (for the "my location" map marker) |
 
 ### Install
 
