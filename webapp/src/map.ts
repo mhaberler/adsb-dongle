@@ -8,6 +8,7 @@ import { CATEGORY_NAMES, SHAPES, shapeOf, type Shape } from "./aircraft-shapes";
 import { gnssDegraded, gnssQuality, gnssValues } from "./gnss";
 import { altOf, callsign, climbArrow, esc, flightLevel } from "./format";
 import { AircraftList, inBand, type ListRow } from "./aircraft-list";
+import { AircraftDb, type AircraftInfo } from "./aircraft-db";
 import flagFontUrl from "./vendor/twemoji-flags/TwemojiCountryFlags.woff2?url";
 import {
   MAX_TILES_PER_LAYER,
@@ -95,7 +96,11 @@ function labelHtml(ac: AircraftMessage): string {
   return `<b>${esc(callsign(ac))}</b>${fl}`;
 }
 
-function popupHtml(ac: AircraftMessage, home: L.LatLngTuple | null): string {
+function popupHtml(
+  ac: AircraftMessage,
+  home: L.LatLngTuple | null,
+  info: AircraftInfo | undefined,
+): string {
   const country = icaoCountry(ac.hex);
   const alt = altOf(ac);
   const dist =
@@ -104,6 +109,9 @@ function popupHtml(ac: AircraftMessage, home: L.LatLngTuple | null): string {
       : undefined;
   const rows: [string, string | number | undefined][] = [
     ["flight", ac.flight?.trim()],
+    ["registration", info?.reg],
+    ["type", info?.type && (info.model ? `${info.type} (${info.model})` : info.type)],
+    ["military", info?.mil ? "yes" : undefined],
     ["category", categoryText(ac.category)],
     ["alt_baro", ac.alt_baro],
     ["alt_geom", ac.alt_geom],
@@ -172,6 +180,7 @@ export class AircraftMap {
   private tracks = new Map<string, Track>(); // aircraft with a position
   private aircraft = new Map<string, AircraftMessage>(); // all, for the list
   private list: AircraftList;
+  private db = new AircraftDb();
   private follow: string | null = null; // hex of the aircraft the map follows
   private followPanning = false;
   private zooming = false;
@@ -352,6 +361,46 @@ export class AircraftMap {
         b.classList.toggle("active", LEAD_CHOICES_MIN[i] === this.view.leadMin),
       );
     mark();
+
+    this.setupDbControls(list);
+  }
+
+  // Aircraft database: downloaded only on request, straight from GitHub
+  // (see aircraft-db.ts) - the app neither bundles nor hosts it.
+  private setupDbControls(list: HTMLElement): void {
+    L.DomUtil.create("div", "leaflet-control-layers-separator", list);
+    const box = L.DomUtil.create("div", "db-options", list);
+    box.innerHTML =
+      `<div>Aircraft database <span class="db-source">(<a href="https://www.mictronics.de/aircraft-database/" ` +
+      `target="_blank" rel="noopener">Mictronics</a> via tar1090-db)</span></div>` +
+      `<div class="db-row"><span class="db-status"></span> <button type="button"></button></div>`;
+    const status = box.querySelector<HTMLSpanElement>(".db-status")!;
+    const button = box.querySelector("button")!;
+    const show = () => {
+      const meta = this.db.status;
+      status.textContent = meta
+        ? `${meta.count.toLocaleString("en")} aircraft, ${new Date(meta.downloadedAt).toISOString().slice(0, 10)}`
+        : "not downloaded";
+      button.textContent = meta ? "Update" : "Download";
+      button.disabled = false;
+    };
+    void this.db.ready.then(show);
+
+    L.DomEvent.on(button, "click", async () => {
+      const ok = confirm(
+        "Download the aircraft database (about 8 MB, best on Wi-Fi) from GitHub " +
+          "(wiedehopf/tar1090-db)? The data is maintained by Mictronics; their terms apply.",
+      );
+      if (!ok) return;
+      button.disabled = true;
+      try {
+        await this.db.download((text) => (status.textContent = text));
+        show();
+      } catch (err) {
+        show();
+        status.textContent = `failed: ${(err as Error).message}`;
+      }
+    });
   }
 
   // Share of aircraft reporting a degraded GNSS position, shown only when
@@ -460,7 +509,7 @@ export class AircraftMap {
       t.ac = ac;
       t.rxMs = performance.now();
     } else {
-      const shape = shapeOf(ac.category);
+      const shape = shapeOf(ac.category, this.db.info(ac.hex));
       const tail = L.polyline([], { weight: 2, opacity: 0.8, interactive: false });
       const track: Track = {
         ac,
@@ -477,12 +526,12 @@ export class AircraftMap {
         ),
         hidden: false,
       };
-      track.marker.bindPopup(() => popupHtml(track.ac, this.home));
+      track.marker.bindPopup(() => popupHtml(track.ac, this.home, this.db.info(track.ac.hex)));
       this.tracks.set(ac.hex, track);
       t = track;
     }
 
-    const shape = shapeOf(ac.category);
+    const shape = shapeOf(ac.category, this.db.info(ac.hex));
     if (shape !== t.shape) {
       t.marker.setIcon(planeIcon(shape));
       t.shape = shape;
@@ -522,7 +571,7 @@ export class AircraftMap {
         this.home && ac.lat !== undefined && ac.lon !== undefined
           ? distanceKm(this.home, [ac.lat, ac.lon])
           : undefined;
-      rows.push({ ac, distKm });
+      rows.push({ ac, distKm, info: this.db.info(ac.hex) });
     }
     this.list.render(rows, this.follow);
   }

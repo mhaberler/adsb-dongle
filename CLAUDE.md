@@ -115,7 +115,7 @@ cd webapp
 bun install
 bun dev             # http://localhost:5173
 bun run build       # tsc + vite build -> webapp/dist
-bun test            # decoder, NIC, display, list + geo unit tests, no hardware needed
+bun test            # decoder, NIC, display, list, database + geo unit tests, no hardware needed
 ```
 
 **Two input modes, auto-detected by first line character** (`webapp/src/main.ts`
@@ -259,6 +259,23 @@ direct-wired module, not the dongle).
   directions), `matchesQuery`, `inBand` (flight levels; no altitude =
   outside an active band). Settings (open, sort, FL band) in
   `localStorage` `adsb.list`. Tested in `aircraft-list.test.ts`.
+- **`aircraft-db.ts`** (`AircraftDb`): Mictronics database via
+  tar1090-db, downloaded only on the user's click from
+  `raw.githubusercontent.com` (CORS `*`; the `github.com/.../raw/...`
+  redirect has no CORS header) — deliberately not bundled, not fetched in
+  CI and not hosted, so the project doesn't redistribute it. Gunzipped in
+  the browser (`DecompressionStream`), parsed line by line (`parseLine`:
+  `ICAO;reg;type;flags;model;...`, first flags char `1` = military,
+  `Miscode` placeholders skipped) and stored in IndexedDB `adsb.aircraftdb`:
+  store `chunks` keyed by the first three hex digits (~1000 used, median
+  4 kB, ~25 MB total), store `meta` (date, count, ICAO type table
+  `icao_aircraft_types.js` → `kind`/`wtc`). `info(hex)` is synchronous:
+  undefined until the chunk is loaded (then fetched in the background;
+  the list re-renders every second, markers on their next update).
+  Download UI: `map.ts` `setupDbControls`, below the view options.
+  `shapeOf(category, info)` falls back to `kind`/`wtc`/`type` where the
+  category is missing or generic (A1-A4/A6 only say light/jet). Tested in
+  `aircraft-db.test.ts`.
 - **`format.ts`**: `esc`, `altOf`, `callsign`, `flightLevel`, `climbArrow`
   shared by map and list.
 - **`aircraft-shapes.ts`**: marker SVG per emitter category (`shapeOf`;

@@ -3,6 +3,7 @@ import { altOf, callsign, climbArrow, esc, flightLevel } from "./format";
 import { gnssQuality, gnssValues } from "./gnss";
 import { icaoCountry } from "./icao-country";
 import { CATEGORY_NAMES } from "./aircraft-shapes";
+import type { AircraftInfo } from "./aircraft-db";
 
 // Aircraft list: a collapsible panel over the map (top right on wide
 // screens, a bottom sheet on narrow ones - see style.css). Sorting, search
@@ -14,6 +15,7 @@ const LIST_KEY = "adsb.list";
 export interface ListRow {
   ac: AircraftMessage;
   distKm?: number; // from my location, if known and the aircraft has a position
+  info?: AircraftInfo; // from the aircraft database, if downloaded
 }
 
 export type SortKey = "flight" | "alt" | "gs" | "dist" | "gnss";
@@ -61,11 +63,12 @@ export function sortRows(rows: ListRow[], key: SortKey, dir: 1 | -1): ListRow[] 
   });
 }
 
-// Search by callsign or ICAO address, ignoring case, spaces and dashes.
+// Search by callsign, ICAO address or registration, ignoring case, spaces
+// and dashes ("daibc" finds D-AIBC).
 const normId = (s: string | undefined) => (s ?? "").replace(/[\s-]/g, "").toUpperCase();
-export function matchesQuery(ac: AircraftMessage, query: string): boolean {
+export function matchesQuery(ac: AircraftMessage, query: string, reg?: string): boolean {
   const q = normId(query);
-  return !q || [callsign(ac), ac.hex].some((s) => normId(s).includes(q));
+  return !q || [callsign(ac), ac.hex, reg].some((s) => normId(s).includes(q));
 }
 
 export const bandActive = (band: AltBand) => band.min !== null || band.max !== null;
@@ -109,7 +112,7 @@ export class AircraftList {
       <button type="button" class="ac-list-head" aria-expanded="false"></button>
       <div class="ac-list-panel">
         <div class="ac-list-filters">
-          <input type="search" class="ac-list-search" placeholder="Search callsign / ICAO" />
+          <input type="search" class="ac-list-search" placeholder="Search callsign / reg / ICAO" />
           <label title="Show only aircraft in this altitude band, on the list and the map">
             FL <input type="number" class="ac-list-fl" data-end="min" min="0" max="600" step="10" />
             – <input type="number" class="ac-list-fl" data-end="max" min="0" max="600" step="10" />
@@ -183,7 +186,7 @@ export class AircraftList {
     const banded = rows.filter((r) => inBand(altOf(r.ac), this.settings.band));
     const outside = rows.length - banded.length;
     const shown = sortRows(
-      banded.filter((r) => matchesQuery(r.ac, this.query)),
+      banded.filter((r) => matchesQuery(r.ac, this.query, r.info?.reg)),
       this.settings.sort,
       this.settings.dir,
     );
@@ -222,13 +225,20 @@ export class AircraftList {
   }
 }
 
-function rowHtml({ ac, distKm }: ListRow, follow: string | null): string {
+function rowHtml({ ac, distKm, info }: ListRow, follow: string | null): string {
   const country = icaoCountry(ac.hex);
   const flag = country?.flag
     ? `<span class="flag" title="${esc(country.name)}">${country.flag}</span>`
     : "";
   const category = typeof ac.category === "string" ? CATEGORY_NAMES[ac.category] : undefined;
-  const sub = [ac.hex.toUpperCase(), category, ac.squawk && `sq ${ac.squawk}`]
+  // registration (else ICAO address), type (else category), military, squawk
+  const id = info?.reg
+    ? `<span title="ICAO ${esc(ac.hex.toUpperCase())}">${esc(info.reg)}</span>`
+    : esc(ac.hex.toUpperCase());
+  const what = info?.type
+    ? `<span title="${esc(info.model ?? info.type)}">${esc(info.type)}</span>`
+    : category && esc(category);
+  const sub = [id, what, info?.mil && '<b class="mil">Military</b>', ac.squawk && `sq ${esc(ac.squawk)}`]
     .filter(Boolean)
     .join(" · ");
 
@@ -260,7 +270,7 @@ function rowHtml({ ac, distKm }: ListRow, follow: string | null): string {
   const title = follow === ac.hex ? "Click to stop following" : "Click to follow on the map";
   return (
     `<tr data-hex="${esc(ac.hex)}" class="${cls}" title="${title}">` +
-    `<td>${flag}<b>${esc(callsign(ac))}</b><div class="sub">${esc(sub)}</div></td>` +
+    `<td>${flag}<b>${esc(callsign(ac))}</b><div class="sub">${sub}</div></td>` +
     `<td>${altCell}</td><td>${speedCell}</td><td>${distCell}</td><td>${gnssCell}</td></tr>`
   );
 }

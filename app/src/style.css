@@ -412,3 +412,27 @@ body {
     max-height: 45vh;
   }
 }
+
+/* Aircraft database download in the layer switcher (map.ts setupDbControls). */
+.db-options .db-source {
+  color: #777;
+  font-size: 11px;
+}
+
+.db-row {
+  margin-top: 4px;
+  white-space: nowrap;
+}
+
+.db-row button {
+  font: inherit;
+  padding: 0 6px;
+  border: 1px solid #bbb;
+  border-radius: 3px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.ac-list .mil {
+  color: #6a1b9a;
+}
