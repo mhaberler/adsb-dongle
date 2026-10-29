@@ -78,7 +78,7 @@ cd webapp
 bun install
 bun dev             # http://localhost:5173, click Connect and pick the dongle's serial port
 bun run build       # production build to webapp/dist
-bun test            # decoder, NIC, display + geo unit tests (no hardware needed)
+bun test            # decoder, NIC, display, list + geo unit tests (no hardware needed)
 ```
 
 Requires a Chromium-based browser. On desktop this uses the
@@ -148,6 +148,32 @@ location.
   once in one area points to GPS jamming; a single one is often just old
   avionics. Spoofing mostly goes unnoticed, since the receiver on board
   believes its fake position.
+
+### Aircraft list
+
+The list (top right; on a phone a "✈ n aircraft" button at the bottom
+that opens into a sheet) shows every aircraft heard, also those without
+a position yet: callsign with flag, ICAO address and category, flight
+level with ↑/↓, speed and track, distance from your location and GNSS
+quality (green/orange/red dot, raw values in the tooltip). Emergencies
+(squawk 7500/7600/7700 or an emergency status) are highlighted in red.
+
+- **Sort**: click a column header, click again to reverse. Aircraft
+  without a value stay at the bottom. Default: nearest first.
+- **Search** by callsign or ICAO address (case, spaces and dashes don't
+  matter); filters only the list.
+- **FL filter**: lower and/or upper flight level. Applies to the list
+  *and* the map — aircraft outside the band disappear from both (their
+  trails keep recording) and are left out of the GNSS status line.
+- **Follow**: click a row. The map centres the aircraft and moves on
+  once it leaves the inner half of the view; the aircraft stays labelled
+  even with labels off. Click the row again or drag the map to stop. On
+  a phone the sheet closes so the map is visible.
+
+Sort order, FL filter and whether the list is open are remembered across
+reloads.
+
+### View options
 
 Trails, labels, range rings and the lead vector are switched in the
 layer switcher (below the map layers); the choice is remembered across

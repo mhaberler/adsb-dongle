@@ -6,6 +6,8 @@ import { destPoint, distanceKm } from "./geo";
 import { icaoCountry } from "./icao-country";
 import { CATEGORY_NAMES, SHAPES, shapeOf, type Shape } from "./aircraft-shapes";
 import { gnssDegraded, gnssQuality, gnssValues } from "./gnss";
+import { altOf, callsign, climbArrow, esc, flightLevel } from "./format";
+import { AircraftList, inBand, type ListRow } from "./aircraft-list";
 import flagFontUrl from "./vendor/twemoji-flags/TwemojiCountryFlags.woff2?url";
 import {
   MAX_TILES_PER_LAYER,
@@ -34,10 +36,9 @@ const DR_MAX_S = 30;
 const DR_TICK_MS = 250;
 const RINGS_KM = [50, 100, 200];
 const LEAD_CHOICES_MIN = [0, 1, 2, 5, 10];
-// |baro_rate| below this (ft/min) counts as level flight in the label
-const CLIMB_MIN_FPM = 128;
 const KT_TO_KMH = 1.852;
 const GNSS_TICK_MS = 1000;
+const LIST_TICK_MS = 1000;
 const GNSS_COLOR = "#d50000";
 
 interface ViewSettings {
@@ -86,19 +87,6 @@ function myLocationIcon(): L.DivIcon {
     iconSize: [16, 16],
     iconAnchor: [8, 8],
   });
-}
-
-const ESC: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
-const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ESC[c]);
-
-const altOf = (ac: AircraftMessage) => ac.alt_baro ?? ac.alt_geom;
-const callsign = (ac: AircraftMessage) => ac.flight?.trim() || ac.hex.toUpperCase();
-const flightLevel = (ft: number) => `FL${String(Math.max(0, Math.round(ft / 100))).padStart(3, "0")}`;
-
-function climbArrow(ac: AircraftMessage): string {
-  const r = ac.baro_rate;
-  if (r === undefined || Math.abs(r) < CLIMB_MIN_FPM) return "";
-  return r > 0 ? "↑" : "↓";
 }
 
 function labelHtml(ac: AircraftMessage): string {
@@ -173,13 +161,20 @@ interface Track {
   fix?: L.LatLngTuple; // last reported position
   points: number;
   runs: TrailRun[];
+  trail: L.LayerGroup; // runs + tail, in trailLayer unless hidden
   tail: L.Polyline; // last fix -> dead-reckoned position
   lead: L.Polyline;
+  hidden: boolean; // outside the list's FL filter band
 }
 
 export class AircraftMap {
   private map: L.Map;
-  private tracks = new Map<string, Track>();
+  private tracks = new Map<string, Track>(); // aircraft with a position
+  private aircraft = new Map<string, AircraftMessage>(); // all, for the list
+  private list: AircraftList;
+  private follow: string | null = null; // hex of the aircraft the map follows
+  private followPanning = false;
+  private zooming = false;
   private hasFitFirstAircraft = false;
   private myLocationMarker: L.Marker | null = null;
   private hasFitMyLocation = false;
@@ -200,6 +195,21 @@ export class AircraftMap {
     this.leadLayer.addTo(this.map);
     this.applyView();
     this.setupGnssStatus();
+
+    this.list = new AircraftList(
+      this.map.getContainer().parentElement ?? document.body,
+      (hex) => this.setFollow(this.follow === hex ? null : hex),
+      () => this.applyBand(),
+    );
+    this.list.refresh = () => this.renderList();
+    window.setInterval(() => {
+      if (!document.hidden) this.renderList();
+    }, LIST_TICK_MS);
+    // Moving the map by hand ends following.
+    this.map.on("dragstart", () => this.setFollow(null));
+    this.map.on("zoomstart", () => (this.zooming = true));
+    this.map.on("zoomend", () => (this.zooming = false));
+
     void navigator.storage?.persist?.();
     window.setInterval(() => {
       if (!document.hidden) for (const t of this.tracks.values()) this.place(t);
@@ -345,7 +355,8 @@ export class AircraftMap {
   }
 
   // Share of aircraft reporting a degraded GNSS position, shown only when
-  // there are any: many at once in one area points to GPS jamming.
+  // there are any: many at once in one area points to GPS jamming. Counts
+  // only aircraft on the map (inside the FL filter band).
   private setupGnssStatus(): void {
     const control = new L.Control({ position: "bottomleft" });
     control.onAdd = () => this.gnssStatus;
@@ -357,7 +368,7 @@ export class AircraftMap {
       let rated = 0;
       let degraded = 0;
       for (const t of this.tracks.values()) {
-        if (!gnssQuality(t.ac)) continue;
+        if (t.hidden || !gnssQuality(t.ac)) continue;
         rated++;
         if (gnssDegraded(t.ac)) degraded++;
       }
@@ -440,6 +451,7 @@ export class AircraftMap {
   }
 
   upsert(ac: AircraftMessage): void {
+    this.aircraft.set(ac.hex, ac);
     if (ac.lat === undefined || ac.lon === undefined) return;
 
     const latlng: L.LatLngTuple = [ac.lat, ac.lon];
@@ -449,6 +461,7 @@ export class AircraftMap {
       t.rxMs = performance.now();
     } else {
       const shape = shapeOf(ac.category);
+      const tail = L.polyline([], { weight: 2, opacity: 0.8, interactive: false });
       const track: Track = {
         ac,
         rxMs: performance.now(),
@@ -457,12 +470,12 @@ export class AircraftMap {
         label: "",
         points: 0,
         runs: [],
-        tail: L.polyline([], { weight: 2, opacity: 0.8, interactive: false }).addTo(
-          this.trailLayer,
-        ),
+        trail: L.layerGroup([tail]).addTo(this.trailLayer),
+        tail,
         lead: L.polyline([], { weight: 1.5, dashArray: "5 4", interactive: false }).addTo(
           this.leadLayer,
         ),
+        hidden: false,
       };
       track.marker.bindPopup(() => popupHtml(track.ac, this.home));
       this.tracks.set(ac.hex, track);
@@ -480,6 +493,7 @@ export class AircraftMap {
       this.extendTrail(t, latlng, gnssDegraded(ac) ? "gnss" : bandOf(altOf(ac)));
       t.fix = latlng;
     }
+    this.setHidden(t, !inBand(altOf(ac), this.list.band));
     this.styleMarker(t);
     this.place(t);
     if (t.marker.isPopupOpen()) t.marker.getPopup()?.update();
@@ -491,13 +505,74 @@ export class AircraftMap {
   }
 
   remove(hex: string): void {
+    this.aircraft.delete(hex);
+    if (this.follow === hex) this.follow = null;
     const t = this.tracks.get(hex);
     if (!t) return;
     t.marker.remove();
-    for (const run of t.runs) run.line.remove();
-    t.tail.remove();
+    this.trailLayer.removeLayer(t.trail);
     t.lead.remove();
     this.tracks.delete(hex);
+  }
+
+  private renderList(): void {
+    const rows: ListRow[] = [];
+    for (const ac of this.aircraft.values()) {
+      const distKm =
+        this.home && ac.lat !== undefined && ac.lon !== undefined
+          ? distanceKm(this.home, [ac.lat, ac.lon])
+          : undefined;
+      rows.push({ ac, distKm });
+    }
+    this.list.render(rows, this.follow);
+  }
+
+  // Aircraft outside the list's FL filter band leave the map too: marker,
+  // trail and lead vector. Their trail keeps growing while hidden.
+  private setHidden(t: Track, hidden: boolean): void {
+    if (t.hidden === hidden) return;
+    t.hidden = hidden;
+    if (hidden) {
+      t.marker.remove();
+      t.lead.remove();
+      this.trailLayer.removeLayer(t.trail);
+      return;
+    }
+    t.marker.addTo(this.map);
+    t.lead.addTo(this.leadLayer);
+    t.trail.addTo(this.trailLayer);
+    t.label = ""; // the marker got a fresh DOM element
+    this.styleMarker(t);
+    this.place(t);
+  }
+
+  private applyBand(): void {
+    for (const t of this.tracks.values()) this.setHidden(t, !inBand(altOf(t.ac), this.list.band));
+  }
+
+  // Follow an aircraft (null: stop). The map centres it now and then only
+  // moves again once it leaves the inner half of the view (followPan) -
+  // re-centring on every update would make the map jitter.
+  private setFollow(hex: string | null): void {
+    this.follow = hex;
+    for (const t of this.tracks.values()) {
+      t.marker.getElement()?.classList.toggle("following", t.ac.hex === hex);
+    }
+    const t = hex ? this.tracks.get(hex) : undefined;
+    if (t) this.map.panTo(t.marker.getLatLng());
+    this.renderList();
+  }
+
+  private followPan(pos: L.LatLngTuple): void {
+    if (this.zooming || this.followPanning) return;
+    const pt = this.map.latLngToContainerPoint(pos);
+    const size = this.map.getSize();
+    if (Math.abs(pt.x - size.x / 2) <= size.x / 4 && Math.abs(pt.y - size.y / 2) <= size.y / 4) {
+      return;
+    }
+    this.followPanning = true;
+    this.map.once("moveend", () => (this.followPanning = false));
+    this.map.panTo(pos, { duration: 0.5 });
   }
 
   // Appends to the run with the point's key (altitude band or "gnss"), or
@@ -514,7 +589,7 @@ export class AircraftMap {
             ? { color: GNSS_COLOR, weight: 2, opacity: 0.9, dashArray: "4 4" }
             : { color: bandColor(key), weight: 2, opacity: 0.8 };
         const line = L.polyline([t.fix, latlng], { ...style, interactive: false }).addTo(
-          this.trailLayer,
+          t.trail,
         );
         t.runs.push({ line, key });
       }
@@ -526,7 +601,7 @@ export class AircraftMap {
     const ll = first.line.getLatLngs() as L.LatLng[];
     ll.shift();
     if (ll.length < 2) {
-      first.line.remove();
+      t.trail.removeLayer(first.line);
       t.runs.shift();
     } else {
       first.line.setLatLngs(ll);
@@ -540,6 +615,7 @@ export class AircraftMap {
     const svg = el.querySelector("svg")!;
     svg.style.transform = SHAPES[t.shape].fixed ? "" : `rotate(${t.ac.track ?? 0}deg)`;
     svg.style.fill = svg.style.color = color;
+    el.classList.toggle("following", t.ac.hex === this.follow);
     const label = labelHtml(t.ac);
     if (label !== t.label) {
       el.querySelector(".plane-label")!.innerHTML = t.label = label;
@@ -560,6 +636,7 @@ export class AircraftMap {
     }
     t.marker.setLatLng(pos);
     t.tail.setLatLngs(pos === t.fix ? [] : [t.fix, pos]);
+    if (ac.hex === this.follow && !t.hidden) this.followPan(pos);
 
     if (moving && this.view.leadMin > 0) {
       const km = (ac.gs! * KT_TO_KMH * this.view.leadMin) / 60;
