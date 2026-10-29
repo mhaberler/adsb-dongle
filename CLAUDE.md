@@ -27,7 +27,10 @@ pio device monitor     # serial monitor (115200 baud) — NDJSON output appears 
 pio run -t upload -t monitor   # flash then monitor
 ```
 
-No test suite in this repo.
+No firmware test suite. The webapp has bun unit tests (`cd webapp && bun
+test`, see below) that also cover the firmware's decode logic through its
+TypeScript port; `src/nic.h` has no Arduino dependency and can be compiled
+on the host with `cc` to compare against it.
 
 ## Architecture
 
