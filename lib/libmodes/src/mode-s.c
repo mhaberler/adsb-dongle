@@ -463,6 +463,8 @@ void mode_s_decode(mode_s_t *self, struct mode_s_msg *mm, unsigned char *msg) {
       mm->altitude = decode_ac12_field(msg, &mm->unit);
       mm->raw_latitude = ((msg[6] & 3) << 15) | (msg[7] << 7) | (msg[8] >> 1);
       mm->raw_longitude = ((msg[8] & 1) << 16) | (msg[9] << 8) | msg[10];
+      // NIC supplement-B (version 2) / single-antenna flag (patch: sensorpod)
+      mm->nic_b = me_getbit(msg, 8);
     } else if (mm->metype == 19 && mm->mesub >= 1 && mm->mesub <= 4) {
       // Airborne Velocity Message
       if (mm->mesub == 1 || mm->mesub == 2) {

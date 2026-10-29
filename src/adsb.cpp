@@ -3,6 +3,7 @@
 #ifdef ADSB_UART
 
 #include "cpr.h"
+#include "nic.h"
 #include <ArduinoJson.h>
 #include <HardwareSerial.h>
 #include <freertos/FreeRTOS.h>
@@ -48,7 +49,7 @@ struct Aircraft {
   uint32_t icao = 0;
   char flight[9] = {0};
   bool has_flight = false;
-  int category = -1;
+  int category = -1; // readsb-style emitter category byte, e.g. 0xA3
   int alt_baro = 0;
   bool has_alt_baro = false;
   int alt_geom = 0;
@@ -71,6 +72,10 @@ struct Aircraft {
   int nic_baro = -1;
   int sil = -1;
   int sil_type = -1;
+  int nic_a = 0; // NIC supplement-A, input to nic below
+
+  // Integrity of the last airborne position (src/nic.h).
+  int nic = -1;
 
   // Emergency/priority status (ME28 mesub 1).
   int emergency = -1;
@@ -223,7 +228,10 @@ static void adsb_process_frame(const char *hex, size_t hexlen) {
 
   if (mm.metype >= 1 && mm.metype <= 4) {
     strncpy(ac->flight, mm.flight, sizeof(ac->flight) - 1);
-    ac->category = mm.aircraft_type;
+    // Emitter category as readsb encodes it: set A-D from type code 4-1
+    // in the high nibble, ME bits 6-8 (libmodes' mesub) in the low one,
+    // published as e.g. "A3".
+    ac->category = ((0x0E - mm.metype) << 4) | mm.mesub;
     ac->has_flight = true;
   } else if (mm.metype >= 9 && mm.metype <= 18) {
     // Airborne position: CPR pairing + global decode.
@@ -252,6 +260,8 @@ static void adsb_process_frame(const char *hex, size_t hexlen) {
         ac->lon = lon;
         ac->has_pos = true;
         ac->seen_pos_ms = now;
+        ac->nic = adsb_compute_nic(mm.metype, ac->nav_version, ac->nic_a,
+                                   mm.nic_b);
       }
     }
   } else if (mm.metype == 19 && mm.mesub >= 1 && mm.mesub <= 4) {
@@ -272,6 +282,8 @@ static void adsb_process_frame(const char *hex, size_t hexlen) {
   } else if (mm.metype == 31 && mm.mesub == 0 && mm.opstatus_valid) {
     ac->has_opstatus = true;
     ac->nav_version = mm.opstatus_version;
+    if (mm.nic_a_valid)
+      ac->nic_a = mm.nic_a;
     if (mm.nac_p_valid)
       ac->nac_p = mm.nac_p;
     if (mm.gva_valid)
@@ -303,8 +315,11 @@ static void adsb_publish_aircraft(Aircraft &ac, uint32_t now) {
   doc["hex"] = hex;
   if (ac.has_flight)
     doc["flight"] = ac.flight;
-  if (ac.category >= 0)
-    doc["category"] = ac.category;
+  if (ac.category >= 0) {
+    char category[3];
+    snprintf(category, sizeof(category), "%02X", (unsigned)ac.category);
+    doc["category"] = category;
+  }
   if (ac.has_alt_baro)
     doc["alt_baro"] = ac.alt_baro;
   if (ac.has_alt_geom)
@@ -330,6 +345,8 @@ static void adsb_publish_aircraft(Aircraft &ac, uint32_t now) {
     doc["lat"] = ac.lat;
     doc["lon"] = ac.lon;
     doc["seen_pos"] = (now - ac.seen_pos_ms) / 1000.0;
+    if (ac.nic >= 0)
+      doc["nic"] = ac.nic;
   }
   if (ac.has_opstatus) {
     doc["version"] = ac.nav_version;

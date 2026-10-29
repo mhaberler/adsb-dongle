@@ -9,6 +9,9 @@
 //  - ME28 mesub 1 (emergency/priority status): emergency code + ID13
 //    squawk field added to mode_s_msg. Bit offsets cross-checked
 //    against readsb's decodeESAircraftStatus().
+//  - ME9-18 (airborne position): ME bit 8 as nic_b - NIC supplement-B in
+//    ADS-B version 2, the single-antenna flag in versions 0/1. Combined
+//    with the type code and NIC-A into NIC by the caller (adsb.cpp).
 // See sensorpod ADSB.md for details.
 #ifndef __MODE_S_DECODER_H
 #define __MODE_S_DECODER_H
@@ -62,6 +65,7 @@ struct mode_s_msg {
   int tflag;                // UTC synchronized?
   int raw_latitude;         // Non decoded latitude
   int raw_longitude;        // Non decoded longitude
+  int nic_b;                // ME bit 8 (airborne position), see top.
   char flight[9];           // 8 chars flight number.
   int ew_dir;               // 0 = East, 1 = West.
   int ew_velocity;          // E/W velocity.

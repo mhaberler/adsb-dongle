@@ -4,7 +4,9 @@
 export interface AircraftMessage {
   hex: string;
   flight?: string;
-  category?: number;
+  // Emitter category as in readsb, e.g. "A3" (large), "B2" (balloon).
+  // Firmware before this field changed sent a number (type code - 1).
+  category?: string | number;
   alt_baro?: number;
   alt_geom?: number;
   gs?: number;
@@ -15,6 +17,7 @@ export interface AircraftMessage {
   lat?: number;
   lon?: number;
   seen_pos?: number;
+  nic?: number; // integrity of the last position, 0-11
   version?: number;
   nic_baro?: number;
   nac_p?: number;
