@@ -4,6 +4,8 @@ import type { AircraftMessage } from "./protocol";
 import { getAdsbColor } from "./altitude-color";
 import { destPoint, distanceKm } from "./geo";
 import { icaoCountry } from "./icao-country";
+import { CATEGORY_NAMES, SHAPES, shapeOf, type Shape } from "./aircraft-shapes";
+import { gnssDegraded, gnssQuality, gnssValues } from "./gnss";
 import flagFontUrl from "./vendor/twemoji-flags/TwemojiCountryFlags.woff2?url";
 import {
   MAX_TILES_PER_LAYER,
@@ -35,6 +37,8 @@ const LEAD_CHOICES_MIN = [0, 1, 2, 5, 10];
 // |baro_rate| below this (ft/min) counts as level flight in the label
 const CLIMB_MIN_FPM = 128;
 const KT_TO_KMH = 1.852;
+const GNSS_TICK_MS = 1000;
+const GNSS_COLOR = "#d50000";
 
 interface ViewSettings {
   trails: boolean;
@@ -57,22 +61,21 @@ try {
   // FontFace unsupported: system emoji font (or letter pairs) instead
 }
 
-// Inline SVG arrow, no external asset. Points north (track 0) by default;
-// rotated in place via CSS transform per-marker. Fill is the
-// ADSBexchange altitude colour ramp (see altitude-color.ts), set per update.
-const PLANE_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-  <path d="M12 1 L17 14 L12 11 L7 14 Z" stroke="#333" stroke-width="0.5"/>
-</svg>`;
-
-// One icon per marker for its whole life: rotation, colour and label are
-// patched into its DOM element on each update instead of rebuilding it.
-function planeIcon(): L.DivIcon {
+// Inline SVG symbol per emitter category (aircraft-shapes.ts), pointing
+// north; rotated via CSS transform and filled with the ADSBexchange
+// altitude colour ramp (altitude-color.ts) per update. Rotation, colour and
+// label are patched into the marker's DOM element instead of rebuilding
+// the icon; only a change of shape (category arriving later) swaps it.
+function planeIcon(shape: Shape): L.DivIcon {
+  const { size, svg } = SHAPES[shape];
   return L.divIcon({
     className: "plane-icon",
-    html: `<div class="plane-rot">${PLANE_SVG}</div><span class="plane-label"></span>`,
-    iconSize: [24, 24],
-    iconAnchor: [12, 12],
+    html:
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-12 -12 24 24" width="${size}" ` +
+      `height="${size}" stroke="#333" stroke-width="0.5">${svg}</svg>` +
+      `<span class="plane-label"></span>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
   });
 }
 
@@ -113,6 +116,7 @@ function popupHtml(ac: AircraftMessage, home: L.LatLngTuple | null): string {
       : undefined;
   const rows: [string, string | number | undefined][] = [
     ["flight", ac.flight?.trim()],
+    ["category", categoryText(ac.category)],
     ["alt_baro", ac.alt_baro],
     ["alt_geom", ac.alt_geom],
     ["FL", alt === undefined ? undefined : `${flightLevel(alt)} ${climbArrow(ac)}`],
@@ -121,6 +125,7 @@ function popupHtml(ac: AircraftMessage, home: L.LatLngTuple | null): string {
     ["baro_rate", ac.baro_rate],
     ["squawk", ac.squawk],
     ["emergency", ac.emergency],
+    ["GNSS", gnssText(ac)],
     ["distance", dist === undefined ? undefined : `${dist.toFixed(dist < 10 ? 1 : 0)} km`],
     ["seen", `${ac.seen.toFixed(1)}s`],
   ];
@@ -134,20 +139,36 @@ function popupHtml(ac: AircraftMessage, home: L.LatLngTuple | null): string {
   return `<div class="ac-popup"><div><b>hex</b>: ${esc(ac.hex)}</div>${from}${lines}</div>`;
 }
 
+function categoryText(category: string | number | undefined): string | undefined {
+  if (typeof category !== "string") return undefined;
+  const name = CATEGORY_NAMES[category];
+  return name ? `${category} (${name})` : category;
+}
+
+function gnssText(ac: AircraftMessage): string | undefined {
+  const q = gnssQuality(ac);
+  return q ? `${q} (${gnssValues(ac)})` : undefined;
+}
+
 const bandOf = (alt: number | undefined) =>
   alt === undefined ? null : Math.round(alt / TRAIL_BAND_FT);
 const bandColor = (band: number | null) =>
   getAdsbColor(band === null ? undefined : band * TRAIL_BAND_FT);
 
+// Runs are keyed by altitude band, or "gnss" while the aircraft reports a
+// degraded GNSS position (drawn red dashed, so jammed areas stand out).
+type RunKey = number | null | "gnss";
+
 interface TrailRun {
   line: L.Polyline;
-  band: number | null;
+  key: RunKey;
 }
 
 interface Track {
   ac: AircraftMessage;
   rxMs: number; // performance.now() when ac arrived; ac.seen_pos is relative to it
   marker: L.Marker;
+  shape: Shape;
   label: string;
   fix?: L.LatLngTuple; // last reported position
   points: number;
@@ -168,6 +189,7 @@ export class AircraftMap {
   private trailLayer = L.layerGroup();
   private leadLayer = L.layerGroup();
   private ringLayer = L.layerGroup();
+  private gnssStatus = L.DomUtil.create("div", "gnss-status");
 
   constructor(containerId: string) {
     this.map = L.map(containerId).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
@@ -177,6 +199,7 @@ export class AircraftMap {
     this.trailLayer.addTo(this.map);
     this.leadLayer.addTo(this.map);
     this.applyView();
+    this.setupGnssStatus();
     void navigator.storage?.persist?.();
     window.setInterval(() => {
       if (!document.hidden) for (const t of this.tracks.values()) this.place(t);
@@ -321,6 +344,32 @@ export class AircraftMap {
     mark();
   }
 
+  // Share of aircraft reporting a degraded GNSS position, shown only when
+  // there are any: many at once in one area points to GPS jamming.
+  private setupGnssStatus(): void {
+    const control = new L.Control({ position: "bottomleft" });
+    control.onAdd = () => this.gnssStatus;
+    control.addTo(this.map);
+    this.gnssStatus.title =
+      "Aircraft reporting NIC < 7 or NACp < 8 for their own GPS position. " +
+      "Many at once hint at GPS jamming; a single one is often just old avionics.";
+    const update = () => {
+      let rated = 0;
+      let degraded = 0;
+      for (const t of this.tracks.values()) {
+        if (!gnssQuality(t.ac)) continue;
+        rated++;
+        if (gnssDegraded(t.ac)) degraded++;
+      }
+      this.gnssStatus.hidden = degraded === 0;
+      this.gnssStatus.textContent =
+        `GNSS degraded: ${degraded} of ${rated} aircraft ` +
+        `(${Math.round((100 * degraded) / Math.max(1, rated))}%)`;
+    };
+    update();
+    window.setInterval(update, GNSS_TICK_MS);
+  }
+
   private saveView(): void {
     try {
       localStorage.setItem(VIEW_KEY, JSON.stringify(this.view));
@@ -399,10 +448,12 @@ export class AircraftMap {
       t.ac = ac;
       t.rxMs = performance.now();
     } else {
+      const shape = shapeOf(ac.category);
       const track: Track = {
         ac,
         rxMs: performance.now(),
-        marker: L.marker(latlng, { icon: planeIcon() }).addTo(this.map),
+        marker: L.marker(latlng, { icon: planeIcon(shape) }).addTo(this.map),
+        shape,
         label: "",
         points: 0,
         runs: [],
@@ -418,8 +469,15 @@ export class AircraftMap {
       t = track;
     }
 
+    const shape = shapeOf(ac.category);
+    if (shape !== t.shape) {
+      t.marker.setIcon(planeIcon(shape));
+      t.shape = shape;
+      t.label = "";
+    }
+
     if (!t.fix || t.fix[0] !== latlng[0] || t.fix[1] !== latlng[1]) {
-      this.extendTrail(t, latlng, altOf(ac));
+      this.extendTrail(t, latlng, gnssDegraded(ac) ? "gnss" : bandOf(altOf(ac)));
       t.fix = latlng;
     }
     this.styleMarker(t);
@@ -442,22 +500,23 @@ export class AircraftMap {
     this.tracks.delete(hex);
   }
 
-  // Appends to the run of the point's altitude band, or starts a new run at
-  // the previous fix; drops points from the front beyond TRAIL_MAX_POINTS.
-  private extendTrail(t: Track, latlng: L.LatLngTuple, alt: number | undefined): void {
+  // Appends to the run with the point's key (altitude band or "gnss"), or
+  // starts a new run at the previous fix; drops points from the front
+  // beyond TRAIL_MAX_POINTS.
+  private extendTrail(t: Track, latlng: L.LatLngTuple, key: RunKey): void {
     if (t.fix) {
-      const band = bandOf(alt);
       const last = t.runs[t.runs.length - 1];
-      if (last && last.band === band) {
+      if (last && last.key === key) {
         last.line.addLatLng(latlng);
       } else {
-        const line = L.polyline([t.fix, latlng], {
-          color: bandColor(band),
-          weight: 2,
-          opacity: 0.8,
-          interactive: false,
-        }).addTo(this.trailLayer);
-        t.runs.push({ line, band });
+        const style: L.PolylineOptions =
+          key === "gnss"
+            ? { color: GNSS_COLOR, weight: 2, opacity: 0.9, dashArray: "4 4" }
+            : { color: bandColor(key), weight: 2, opacity: 0.8 };
+        const line = L.polyline([t.fix, latlng], { ...style, interactive: false }).addTo(
+          this.trailLayer,
+        );
+        t.runs.push({ line, key });
       }
     }
     if (++t.points <= TRAIL_MAX_POINTS) return;
@@ -478,8 +537,9 @@ export class AircraftMap {
     const el = t.marker.getElement();
     if (!el) return;
     const color = getAdsbColor(altOf(t.ac));
-    el.querySelector<HTMLElement>(".plane-rot")!.style.transform = `rotate(${t.ac.track ?? 0}deg)`;
-    el.querySelector("path")!.setAttribute("fill", color);
+    const svg = el.querySelector("svg")!;
+    svg.style.transform = SHAPES[t.shape].fixed ? "" : `rotate(${t.ac.track ?? 0}deg)`;
+    svg.style.fill = svg.style.color = color;
     const label = labelHtml(t.ac);
     if (label !== t.label) {
       el.querySelector(".plane-label")!.innerHTML = t.label = label;

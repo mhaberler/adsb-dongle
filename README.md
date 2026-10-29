@@ -38,7 +38,7 @@ pio run -t upload -t monitor   # flash then monitor
 Per-aircraft object, published on-change, at most once per second:
 
 ```json
-{"hex":"40621d","flight":"BAW123  ","category":3,"alt_baro":37000,"gs":412,"track":271,"baro_rate":-64,"lat":51.4712,"lon":-0.4589,"seen_pos":0.8,"version":2,"nic_baro":1,"nac_p":9,"sil":3,"sil_type":"perhour","gva":2,"seen":0.2,"messages":184}
+{"hex":"40621d","flight":"BAW123  ","category":"A3","alt_baro":37000,"gs":412,"track":271,"baro_rate":-64,"lat":51.4712,"lon":-0.4589,"seen_pos":0.8,"nic":8,"version":2,"nic_baro":1,"nac_p":9,"sil":3,"sil_type":"perhour","gva":2,"seen":0.2,"messages":184}
 ```
 
 Tombstone, published once when an aircraft hasn't sent a message for 60 s
@@ -57,8 +57,11 @@ Receiver-wide stats, published every 5 s:
 Fields are omitted (not zero/null-filled) until decoded at least once —
 e.g. `lat`/`lon`/`seen_pos` only appear after a valid even/odd CPR pair,
 `squawk`/`emergency` only if the aircraft sends an emergency/priority
-status message. See [CLAUDE.md](CLAUDE.md) for the full field list and
-decoder internals.
+status message. `category` is the emitter category the aircraft
+broadcasts, as in readsb (`"A3"` large, `"A7"` rotorcraft, `"B2"`
+balloon …); `nic` is the integrity category (0-11) of the last position,
+derived from its type code. See [CLAUDE.md](CLAUDE.md) for the full field
+list and decoder internals.
 
 ## Web viewer
 
@@ -75,7 +78,7 @@ cd webapp
 bun install
 bun dev             # http://localhost:5173, click Connect and pick the dongle's serial port
 bun run build       # production build to webapp/dist
-bun test            # decoder + geo unit tests (no hardware needed)
+bun test            # decoder, NIC, display + geo unit tests (no hardware needed)
 ```
 
 Requires a Chromium-based browser. On desktop this uses the
@@ -119,10 +122,14 @@ plugged in.
 
 ### Aircraft display
 
-Each aircraft is an arrow pointing along its track, coloured by altitude
-(ADSBexchange colour ramp). Click it for a popup with the decoded fields,
-the country of registration (flag + name, derived from the ICAO address
-block) and the distance from your own location.
+Each aircraft is a symbol pointing along its track, coloured by altitude
+(ADSBexchange colour ramp). The symbol follows the emitter category the
+aircraft broadcasts: jet, heavy, light aircraft, glider, helicopter,
+balloon (not rotated), drone or ground vehicle — a plain arrow while the
+category is unknown. Click it for a popup with the decoded fields, the
+category, the GNSS quality, the country of registration (flag + name,
+derived from the ICAO address block) and the distance from your own
+location.
 
 - **Trails**: the reported positions (last 300 per aircraft), coloured in
   1000 ft altitude bands, so climbs and descents show as colour steps.
@@ -134,6 +141,13 @@ block) and the distance from your own location.
   (or app) has a location fix.
 - **Lead vector** (off/1/2/5/10 min): dashed arrow to where the aircraft
   will be after that time at its current track and speed.
+- **GNSS quality**: every aircraft reports how good its own GPS position
+  is — NIC (integrity) and NACp (accuracy). Below NIC 7 or NACp 8 it
+  counts as *degraded*: its trail is drawn red dashed, and a status line
+  (bottom left) shows the share of degraded aircraft. Many degraded at
+  once in one area points to GPS jamming; a single one is often just old
+  avionics. Spoofing mostly goes unnoticed, since the receiver on board
+  believes its fake position.
 
 Trails, labels, range rings and the lead vector are switched in the
 layer switcher (below the map layers); the choice is remembered across
