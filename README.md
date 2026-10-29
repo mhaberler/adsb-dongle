@@ -78,7 +78,7 @@ cd webapp
 bun install
 bun dev             # http://localhost:5173, click Connect and pick the dongle's serial port
 bun run build       # production build to webapp/dist
-bun test            # decoder, NIC, display + geo unit tests (no hardware needed)
+bun test            # decoder, NIC, display, list, database + geo unit tests (no hardware needed)
 ```
 
 Requires a Chromium-based browser. On desktop this uses the
@@ -148,6 +148,49 @@ location.
   once in one area points to GPS jamming; a single one is often just old
   avionics. Spoofing mostly goes unnoticed, since the receiver on board
   believes its fake position.
+
+### Aircraft list
+
+The list (top right; on a phone a "✈ n aircraft" button at the bottom
+that opens into a sheet) shows every aircraft heard, also those without
+a position yet: callsign with flag, registration and type (with the
+[aircraft database](#aircraft-database), otherwise ICAO address and
+category), flight level with ↑/↓, speed and track, distance from your location and GNSS
+quality (green/orange/red dot, raw values in the tooltip). Emergencies
+(squawk 7500/7600/7700 or an emergency status) are highlighted in red.
+
+- **Sort**: click a column header, click again to reverse. Aircraft
+  without a value stay at the bottom. Default: nearest first.
+- **Search** by callsign, registration or ICAO address (case, spaces and
+  dashes don't matter: "daibd" finds D-AIBD); filters only the list.
+- **FL filter**: lower and/or upper flight level. Applies to the list
+  *and* the map — aircraft outside the band disappear from both (their
+  trails keep recording) and are left out of the GNSS status line.
+- **Follow**: click a row. The map centres the aircraft and moves on
+  once it leaves the inner half of the view; the aircraft stays labelled
+  even with labels off. Click the row again or drag the map to stop. On
+  a phone the sheet closes so the map is visible.
+
+Sort order, FL filter and whether the list is open are remembered across
+reloads.
+
+### Aircraft database
+
+Registration, type, model and a military flag come from the aircraft
+database maintained by [Mictronics](https://www.mictronics.de/aircraft-database/),
+as published in [wiedehopf/tar1090-db](https://github.com/wiedehopf/tar1090-db).
+It is **not bundled** with the webapp or the APK and not hosted by this
+project: in the layer switcher, "Aircraft database → Download" fetches it
+straight from GitHub (about 8 MB, best on Wi-Fi; Mictronics' terms
+apply) and stores it in the browser/app (IndexedDB, ~25 MB) for offline
+use. "Update" fetches the current version. Without it those fields simply
+stay empty.
+
+The database also improves the symbols: where the aircraft's category
+says nothing (or is missing), the type decides — e.g. an NH90 is drawn
+as a helicopter, a type with heavy wake turbulence as a heavy.
+
+### View options
 
 Trails, labels, range rings and the lead vector are switched in the
 layer switcher (below the map layers); the choice is remembered across

@@ -1,5 +1,9 @@
+import type { AircraftInfo } from "./aircraft-db";
+
 // Marker symbols per emitter category (the "A3"-style category the
-// aircraft itself broadcasts, see protocol.ts). Drawn nose-up (north) in a
+// aircraft itself broadcasts, see protocol.ts), falling back to the type
+// description from the aircraft database (aircraft-db.ts) where the
+// category says nothing. Drawn nose-up (north) in a
 // -12..12 viewBox and rotated with the track, except `fixed` ones.
 // Narrow shapes get a thinner outline so their fill doesn't disappear.
 
@@ -73,10 +77,20 @@ const BY_CATEGORY: Record<string, Shape> = {
   C3: "ground", // point obstacle
 };
 
-// Older firmware sent a number here (type code - 1); that and unknown
-// categories fall back to the arrow.
-export function shapeOf(category: string | number | undefined): Shape {
-  return (typeof category === "string" && BY_CATEGORY[category]) || "arrow";
+// Older firmware sent a number here (type code - 1). Without a usable
+// category or database entry: the arrow.
+export function shapeOf(category: string | number | undefined, info?: AircraftInfo): Shape {
+  const byCategory = typeof category === "string" ? BY_CATEGORY[category] : undefined;
+  // these categories are more specific than anything the database knows
+  if (byCategory && byCategory !== "jet" && byCategory !== "light") return byCategory;
+  const kind = info?.kind ?? ""; // e.g. "L2J": land, 2 engines, jet
+  if (/^[HG]/.test(kind)) return "heli"; // G = gyrocopter
+  if (info?.type === "GLID") return "glider";
+  if (info?.type === "BALL") return "balloon";
+  if (info?.wtc === "H" || info?.wtc === "J") return "heavy";
+  if (/^L\d[PT]$/.test(kind) && info?.wtc === "L") return "light"; // light piston/turboprop
+  if (byCategory) return byCategory;
+  return kind ? "jet" : "arrow";
 }
 
 export const CATEGORY_NAMES: Record<string, string> = {

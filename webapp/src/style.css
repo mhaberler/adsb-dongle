@@ -103,8 +103,13 @@ body {
   text-shadow: 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff;
 }
 
-.no-labels .plane-label {
+/* The followed aircraft stays labelled. */
+.no-labels .plane-icon:not(.following) .plane-label {
   display: none;
+}
+
+.plane-icon.following svg {
+  filter: drop-shadow(0 0 2px #1565c0) drop-shadow(0 0 4px #1565c0);
 }
 
 /* Range ring distance, at the ring's north point (map.ts drawRings). */
@@ -163,4 +168,212 @@ body {
 
 .plane-icon svg {
   overflow: visible;
+}
+
+/* Aircraft list (aircraft-list.ts): panel top right on wide screens,
+   a pill that opens into a bottom sheet on narrow ones. */
+.ac-list {
+  position: absolute;
+  z-index: 1000;
+  top: calc(64px + var(--safe-area-inset-top, env(safe-area-inset-top, 0px)));
+  right: calc(12px + var(--safe-area-inset-right, env(safe-area-inset-right, 0px)));
+  width: 360px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+}
+
+.ac-list-head {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ac-list-head::after {
+  content: " ▾";
+}
+
+.ac-list.open .ac-list-head::after {
+  content: " ▴";
+}
+
+.ac-list-panel {
+  display: none;
+  border-top: 1px solid #ddd;
+}
+
+.ac-list.open .ac-list-panel {
+  display: block;
+}
+
+.ac-list-filters {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+}
+
+.ac-list-search {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+}
+
+.ac-list-fl {
+  width: 3.5em;
+  font: inherit;
+}
+
+.ac-list-scroll {
+  max-height: calc(100vh - 64px - 160px);
+  overflow-y: auto;
+}
+
+.ac-list table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ac-list th {
+  position: sticky;
+  top: 0;
+  background: #f4f4f4;
+  padding: 4px 6px;
+  text-align: left;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.ac-list th.sorted::after {
+  content: " ▲";
+  font-size: 9px;
+}
+
+.ac-list th.sorted.desc::after {
+  content: " ▼";
+}
+
+.ac-list td {
+  padding: 3px 6px;
+  border-top: 1px solid #eee;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.ac-list tbody tr {
+  cursor: pointer;
+}
+
+.ac-list tbody tr:hover td {
+  background: #f0f6ff;
+}
+
+.ac-list tr.following td {
+  background: #e3eefc;
+}
+
+.ac-list tr.following td:first-child {
+  box-shadow: inset 3px 0 #1565c0;
+}
+
+.ac-list tr.emergency td {
+  background: #ffe5e5;
+  color: #b00020;
+}
+
+.ac-list .sub {
+  color: #777;
+  font-size: 10px;
+}
+
+.ac-list-empty {
+  padding: 8px 10px;
+  color: #777;
+}
+
+.track-arrow {
+  display: inline-block;
+  font-weight: 600;
+}
+
+.gnss-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.gnss-ok {
+  background: #2e9e4f;
+}
+
+.gnss-degraded {
+  background: #f5a623;
+}
+
+.gnss-unusable {
+  background: #d50000;
+}
+
+@media (max-width: 600px) {
+  .ac-list {
+    top: auto;
+    right: auto;
+    left: 50%;
+    bottom: calc(28px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+    width: auto;
+    transform: translateX(-50%);
+    border-radius: 16px;
+  }
+
+  .ac-list-head {
+    padding: 6px 14px;
+    white-space: nowrap;
+  }
+
+  .ac-list.open {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    transform: none;
+    border-radius: 12px 12px 0 0;
+    padding-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  }
+
+  .ac-list-scroll {
+    max-height: 45vh;
+  }
+}
+
+/* Aircraft database download in the layer switcher (map.ts setupDbControls). */
+.db-options .db-source {
+  color: #777;
+  font-size: 11px;
+}
+
+.db-row {
+  margin-top: 4px;
+  white-space: nowrap;
+}
+
+.db-row button {
+  font: inherit;
+  padding: 0 6px;
+  border: 1px solid #bbb;
+  border-radius: 3px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.ac-list .mil {
+  color: #6a1b9a;
 }

@@ -115,7 +115,7 @@ cd webapp
 bun install
 bun dev             # http://localhost:5173
 bun run build       # tsc + vite build -> webapp/dist
-bun test            # decoder, NIC, display + geo unit tests, no hardware needed
+bun test            # decoder, NIC, display, list, database + geo unit tests, no hardware needed
 ```
 
 **Two input modes, auto-detected by first line character** (`webapp/src/main.ts`
@@ -219,10 +219,13 @@ direct-wired module, not the dongle).
   `lib/libmodes/src/mode-s.c` directly on the same frames (see git history
   for the one-off comparison script) — confirms bit-level parity with the
   firmware decoder, not just internal self-consistency.
-- **`map.ts`** (`AircraftMap`): one `Track` per ICAO address — marker
-  (one `L.divIcon` for its whole life; rotation, fill colour and label are
-  patched into its DOM element per update, not rebuilt), trail polylines,
-  dead-reckoning tail and lead vector. Trails are split into runs per
+- **`map.ts`** (`AircraftMap`): one `Track` per ICAO address with a
+  position — marker (rotation, fill colour and label are patched into its
+  DOM element per update; the `L.divIcon` is only swapped when the shape
+  changes, see `aircraft-shapes.ts`), a per-track `L.layerGroup` (`trail`:
+  trail polylines + dead-reckoning tail) inside `trailLayer`, and the lead
+  vector. A separate `aircraft` map holds every aircraft heard (also
+  without position) for the list. Trails are split into runs per
   1000 ft altitude band (`TRAIL_BAND_FT`, one polyline per run, coloured
   via `getAdsbColor`), capped at `TRAIL_MAX_POINTS` (300) by trimming the
   first run; a new point is only added when lat/lon changed (in raw mode
@@ -239,6 +242,42 @@ direct-wired module, not the dongle).
   `FontFace` (so the app gets it without CSS changes); the `.flag`,
   `.plane-label`, `.ring-label` and view-option CSS is in both style.css
   files.
+  FL filter: `setHidden()` takes marker, trail group and lead vector off
+  the map for tracks outside `list.band` (re-checked per `upsert` and on
+  band change); hidden tracks keep recording and are skipped by the GNSS
+  status. Follow: `setFollow()` pans to the aircraft and marks marker and
+  row (`following` class); `place()` calls `followPan()`, which only pans
+  once the aircraft leaves the inner half of the view; `dragstart` ends
+  it.
+- **`aircraft-list.ts`** (`AircraftList`): DOM panel appended next to the
+  map container (`#app`), so both webapp and app get it without
+  index.html changes. Top right on wide screens; at ≤ 600 px a pill at the
+  bottom that opens into a bottom sheet and closes on row click (CSS in
+  both style.css files, safe-area aware). Re-rendered once a second by
+  `AircraftMap` (`LIST_TICK_MS`), not per frame; clicks via delegation on
+  `tbody`. Pure, tested helpers: `sortRows` (missing values last in both
+  directions), `matchesQuery`, `inBand` (flight levels; no altitude =
+  outside an active band). Settings (open, sort, FL band) in
+  `localStorage` `adsb.list`. Tested in `aircraft-list.test.ts`.
+- **`aircraft-db.ts`** (`AircraftDb`): Mictronics database via
+  tar1090-db, downloaded only on the user's click from
+  `raw.githubusercontent.com` (CORS `*`; the `github.com/.../raw/...`
+  redirect has no CORS header) — deliberately not bundled, not fetched in
+  CI and not hosted, so the project doesn't redistribute it. Gunzipped in
+  the browser (`DecompressionStream`), parsed line by line (`parseLine`:
+  `ICAO;reg;type;flags;model;...`, first flags char `1` = military,
+  `Miscode` placeholders skipped) and stored in IndexedDB `adsb.aircraftdb`:
+  store `chunks` keyed by the first three hex digits (~1000 used, median
+  4 kB, ~25 MB total), store `meta` (date, count, ICAO type table
+  `icao_aircraft_types.js` → `kind`/`wtc`). `info(hex)` is synchronous:
+  undefined until the chunk is loaded (then fetched in the background;
+  the list re-renders every second, markers on their next update).
+  Download UI: `map.ts` `setupDbControls`, below the view options.
+  `shapeOf(category, info)` falls back to `kind`/`wtc`/`type` where the
+  category is missing or generic (A1-A4/A6 only say light/jet). Tested in
+  `aircraft-db.test.ts`.
+- **`format.ts`**: `esc`, `altOf`, `callsign`, `flightLevel`, `climbArrow`
+  shared by map and list.
 - **`aircraft-shapes.ts`**: marker SVG per emitter category (`shapeOf`;
   jet/heavy/light/glider/heli/balloon/drone/ground, `arrow` for unknown,
   A0 and old numeric categories). The marker keeps one icon until the
