@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "leaflet": "^1.9.4",
-    "leaflet.offline": "^3.2.1"
+    "leaflet.offline": "^3.2.1",
+    "mqtt": "^5.16.1"
   }
 }

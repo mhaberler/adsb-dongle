@@ -67,7 +67,7 @@ list and decoder internals.
 
 `webapp/` is a browser-only ADS-B viewer: connects to the dongle over the
 [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API)
-(no server, no native app) and plots live aircraft on a Leaflet map
+(no server, no native app) or to an [MQTT broker feed](#mqtt-broker-feed), and plots live aircraft on a Leaflet map
 (OpenStreetMap or OpenTopoMap base, optional openflightmaps overlay,
 [cached for offline use](#map-layers-and-offline-cache)) with
 [trails, labels, range rings and lead vectors](#aircraft-display), styled after [airplanejs](https://github.com/watson/airplanejs). Built
@@ -115,6 +115,21 @@ shape (no separate mode to pick):
 
 Connect auto-probes 115200 then 921600 to find whichever source is
 plugged in.
+
+### MQTT broker feed
+
+Instead of a serial port, the webapp can subscribe to raw frames on an
+MQTT-over-WebSocket broker: a sensorpod publishes every received frame
+(`*<hex>;`) on topic `ihex`. Enter the broker's WebSocket URL in the
+toolbar (default `ws://esp32p4-e185df.local:8080/mqtt`, remembered) and
+click **MQTT**. Frames go through the same in-browser decoder as a
+directly wired module. Serial and MQTT are exclusive - connecting one
+drops the other.
+
+**Limitation:** browsers refuse `ws://` from an `https://` page (mixed
+content), so the hosted GitHub Pages build can only reach a `wss://`
+broker. For a plain `ws://` broker on the LAN, run the webapp over http
+(`bun dev` or `bun run preview`).
 
 ![Directly decoding hex messages in-browser](assets/Screenshot%202026-08-31%20at%2009.23.21.png)
 
@@ -230,15 +245,24 @@ bulk downloads — please respect the tile providers' usage policies. The
 openflightmaps tile URL is the one their own web map uses, not a
 documented API, and may change.
 
-## Android app
+## Android / iOS app
 
-`app/` is a Capacitor-wrapped Android app for when WebUSB doesn't work
+`app/` is a Capacitor-wrapped app for Android and iOS. On Android it
+prefers a USB serial device; with none plugged in - and always on iOS,
+which has no USB serial - it finds MQTT brokers via mDNS
+(`_mqtt-ws._tcp`) and subscribes to the [`ihex` raw-frame topic](#mqtt-broker-feed).
+The first time, a picker lists the brokers found; the chosen one is
+remembered and reconnected silently from then on (tap the status dot to
+disconnect, tap again to choose). Plugging in a USB device switches to it;
+unplugging falls back to the broker.
+
+The Android side exists for when WebUSB doesn't work
 with your FTDI adapter (as it didn't on the device this was built for).
 It uses a native plugin,
 [`@leeskies/capacitor-usb-serial`](https://github.com/LeeSkies/capacitor-usb-serial)
 (wraps [mik3y/usb-serial-for-android](https://github.com/mik3y/usb-serial-for-android),
 the same library the "Serial USB Terminal" app on Google Play uses)
-instead of any browser API — Android-only, no iOS target. It imports the
+instead of any browser API (Android-only; the iOS build leaves it out). It imports the
 shared decode/map pipeline directly from `webapp/src/` (no code
 duplication) and auto-detects both stream formats exactly like the
 webapp. Auto-launches and auto-connects when the FTDI adapter or the
@@ -259,7 +283,8 @@ app — preload the area before going out of coverage.
 | Display name        | ADS-B Dongle                                                      |
 | Min Android version | 8.0 (API 24)                                                      |
 | Signing             | debug-signed only (no Play Store release)                         |
-| Permissions         | USB host, coarse/fine location (for the "my location" map marker) |
+| Permissions         | USB host, coarse/fine location (for the "my location" map marker), Wi-Fi multicast (mDNS broker discovery) |
+| iOS                 | broker feed only; Local Network permission for mDNS                |
 
 ### Install
 
@@ -275,14 +300,20 @@ debug-signed, not from the Play Store). Then plug in the FTDI adapter
 ```sh
 cd app
 bun install
-bun run sync        # build web assets + bunx cap sync android
+bun run sync        # build web assets + bunx cap sync (android + ios)
 bun run android      # sync + bunx cap run android (needs a device/emulator)
+bun run ios          # sync + bunx cap run ios (needs Xcode)
 ```
 
-A GitHub Actions workflow (`.github/workflows/android-apk.yml`) builds
-the debug APK and publishes it as a
+A GitHub Actions workflow (`.github/workflows/app-release.yml`) builds
+the debug APK and a signed IPA (also uploaded to TestFlight) and
+publishes both as a
 [GitHub Release](https://github.com/mhaberler/adsb-dongle/releases) —
-no local Android SDK needed. Triggered by pushing a `v*` tag:
+no local Android SDK or Xcode needed. The iOS job needs the repo secrets
+`ASC_KEY_P8` (base64 of the App Store Connect API `.p8` key),
+`ASC_KEY_ID` and `ASC_ISSUER_ID`, and bundle ID
+`io.github.mhaberler.adsbdongle` registered with an App Store Connect app
+record. Triggered by pushing a `v*` tag:
 
 ```sh
 git tag v0.1.1
@@ -290,7 +321,7 @@ git push origin v0.1.1
 ```
 
 (or run it manually via `workflow_dispatch` in the Actions tab, which
-still uploads the APK as a build artifact but skips the release step
+still uploads the APK and IPA as build artifacts but skips the release step
 since there's no tag).
 
 ## More detail

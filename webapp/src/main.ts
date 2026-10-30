@@ -7,14 +7,25 @@ import { classifyLine, parseLine, parseRawFrame } from "./protocol";
 import type { StatsMessage } from "./protocol";
 import { AircraftMap } from "./map";
 import { AircraftStore } from "./aircraft-store";
+import { MqttFeed, RAW_FRAME_TOPIC, isMixedContent } from "./mqtt-feed";
 
 const connectBtn = document.querySelector<HTMLButtonElement>("#connect-btn")!;
 const connStatus = document.querySelector<HTMLSpanElement>("#conn-status")!;
 const statsEl = document.querySelector<HTMLDivElement>("#stats")!;
 const geoStatus = document.querySelector<HTMLSpanElement>("#geo-status")!;
+const mqttBtn = document.querySelector<HTMLButtonElement>("#mqtt-btn")!;
+const mqttUrl = document.querySelector<HTMLInputElement>("#mqtt-url")!;
+
+const MQTT_URL_KEY = "adsb.mqttUrl";
+mqttUrl.value = localStorage.getItem(MQTT_URL_KEY) ?? "ws://esp32p4-e185df.local:8080/mqtt";
 
 const map = new AircraftMap("map");
 const lineReader = new LineReader();
+const mqttFeed = new MqttFeed();
+
+// Exactly one input source at a time: a serial link or a broker feed.
+type Source = "none" | "serial" | "mqtt";
+let source: Source = "none";
 
 // Web Serial (navigator.serial) is desktop-only - Android Chrome has no
 // such API at all, so there we fall back to WebUSB with hand-rolled
@@ -83,9 +94,12 @@ function renderStats(s: StatsMessage): void {
   ].join("\n");
 }
 
-function setConnected(connected: boolean): void {
-  connStatus.textContent = connected ? "connected" : "disconnected";
-  connectBtn.textContent = connected ? "Disconnect" : "Connect";
+function setSource(next: Source): void {
+  source = next;
+  connStatus.textContent =
+    next === "serial" ? "connected" : next === "mqtt" ? `MQTT ${RAW_FRAME_TOPIC}` : "disconnected";
+  connectBtn.textContent = next === "serial" ? "Disconnect" : "Connect";
+  mqttBtn.textContent = next === "mqtt" ? "Disconnect MQTT" : "MQTT";
 }
 
 // Used only during baud auto-probe: a line is "valid" if it's a recognized
@@ -138,7 +152,7 @@ function handleLine(line: string): void {
   if (mode === "ndjson") {
     handleNdjsonLine(line);
   } else if (mode === "raw") {
-    if (!rawCommandSent) {
+    if (!rawCommandSent && source === "serial") {
       rawCommandSent = true;
       // GNS5892 command interface: "#49-03<CR>" = DF17/18/19-only output
       // mode. Harmless no-op if this line actually came via an ESP32
@@ -174,23 +188,55 @@ function resetState(): void {
 }
 
 function onDisconnect(): void {
-  setConnected(false);
+  setSource("none");
   statsEl.textContent = "";
   resetState();
 }
 
+async function disconnectSource(): Promise<void> {
+  if (source === "serial") await lineReader.disconnect();
+  else if (source === "mqtt") mqttFeed.disconnect();
+  if (source !== "none") onDisconnect();
+}
+
 connectBtn.addEventListener("click", async () => {
-  if (connectBtn.textContent === "Disconnect") {
-    await lineReader.disconnect();
-    onDisconnect();
+  if (source === "serial") {
+    await disconnectSource();
     return;
   }
 
   try {
-    resetState();
     const { transport, probeOrder } = await requestTransport();
+    await disconnectSource();
+    resetState();
     await lineReader.connect(transport, probeOrder, isRecognizedLine, handleLine, onDisconnect);
-    setConnected(true);
+    setSource("serial");
+  } catch (err) {
+    connStatus.textContent = `error: ${(err as Error).message}`;
+  }
+});
+
+mqttBtn.addEventListener("click", async () => {
+  if (source === "mqtt") {
+    await disconnectSource();
+    return;
+  }
+
+  const url = mqttUrl.value.trim();
+  if (isMixedContent(location.protocol, url)) {
+    connStatus.textContent = "error: ws:// is blocked on an https page - use wss:// or run the webapp over http (bun dev)";
+    return;
+  }
+  localStorage.setItem(MQTT_URL_KEY, url);
+  try {
+    await disconnectSource();
+    resetState();
+    connStatus.textContent = "connecting...";
+    await mqttFeed.connect(url, RAW_FRAME_TOPIC, handleLine, () => {
+      onDisconnect();
+      connStatus.textContent = "error: broker lost";
+    });
+    setSource("mqtt");
   } catch (err) {
     connStatus.textContent = `error: ${(err as Error).message}`;
   }

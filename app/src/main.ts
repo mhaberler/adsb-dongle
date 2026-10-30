@@ -1,4 +1,6 @@
 import "./style.css";
+import { Capacitor } from "@capacitor/core";
+import { App } from "@capacitor/app";
 import { Geolocation } from "@capacitor/geolocation";
 import { UsbSerial } from "@leeskies/capacitor-usb-serial";
 import { LineReader } from "../../webapp/src/transport";
@@ -7,6 +9,9 @@ import { classifyLine, parseLine, parseRawFrame } from "../../webapp/src/protoco
 import type { StatsMessage } from "../../webapp/src/protocol";
 import { AircraftMap } from "../../webapp/src/map";
 import { AircraftStore } from "../../webapp/src/aircraft-store";
+import { MqttFeed, RAW_FRAME_TOPIC } from "../../webapp/src/mqtt-feed";
+import { BrokerDiscovery, type Broker } from "./broker-discovery";
+import { SourcePicker, type PickerItem } from "./source-picker";
 
 const connectBtn = document.querySelector<HTMLButtonElement>("#connect-btn")!;
 const statusMsg = document.querySelector<HTMLDivElement>("#status-msg")!;
@@ -29,6 +34,13 @@ const statsEl = document.querySelector<HTMLDivElement>("#stats")!;
 
 const map = new AircraftMap("map");
 const lineReader = new LineReader();
+const mqttFeed = new MqttFeed();
+const discovery = new BrokerDiscovery();
+const picker = new SourcePicker();
+
+// USB serial exists only on Android (the plugin has no iOS side); iOS is
+// broker-feed only.
+const HAS_USB = Capacitor.getPlatform() === "android";
 
 // Fixed baud, no auto-probe: this app only targets the FTDI-wired module
 // (see README.md), and the probe's close+reopen cycle raced the native
@@ -38,6 +50,24 @@ const lineReader = new LineReader();
 const BAUD = 921600;
 
 let connecting = false;
+
+// Exactly one input source at a time. USB wins over a broker feed: plugging
+// a device in replaces the feed, unplugging falls back to the remembered
+// broker.
+type Source = "none" | "usb" | "mqtt";
+let source: Source = "none";
+// Set by tapping to disconnect: suppresses auto-connect (startup excepted,
+// device plug-in excepted) until the next tap.
+let manualOff = false;
+let paused = false;
+
+const REMEMBERED_KEY = "adsb.broker";
+// How long a scan may run without the remembered broker showing up before
+// the picker is offered instead.
+const REMEMBERED_WAIT_MS = 5000;
+let scanStartedAt = 0;
+let autoPickerShown = false;
+let usbPresent = false;
 
 async function initGeolocation(): Promise<void> {
   try {
@@ -100,8 +130,14 @@ function setState(state: ConnState): void {
   connectBtn.setAttribute("aria-label", label);
 }
 
-function setConnected(connected: boolean): void {
-  setState(connected ? "connected" : "disconnected");
+function setSource(next: Source, label = ""): void {
+  source = next;
+  setState(next === "none" ? "disconnected" : "connected");
+  if (next !== "none") {
+    connectBtn.title = `${label} - tap to disconnect`;
+    connectBtn.setAttribute("aria-label", connectBtn.title);
+    toast(label, 2500);
+  }
 }
 
 function handleNdjsonLine(line: string): void {
@@ -185,25 +221,40 @@ function resetState(): void {
 }
 
 function onDisconnect(): void {
-  setConnected(false);
+  if (source === "none") return;
+  setSource("none");
   statsEl.textContent = "";
   resetState();
+  // USB unplugged or broker lost: fall back to whatever broker is around.
+  window.setTimeout(autoSelect, 0);
 }
 
-async function connect(silent: boolean): Promise<void> {
-  if (connecting || connState === "connected") return;
+async function disconnectSource(): Promise<void> {
+  if (source === "usb") await lineReader.disconnect();
+  else if (source === "mqtt") mqttFeed.disconnect();
+  onDisconnect();
+}
+
+async function connectUsb(silent: boolean): Promise<void> {
+  if (!HAS_USB || connecting || source === "usb") return;
   connecting = true;
+  const prev = connState;
   setState("connecting");
   try {
-    resetState();
+    // Fails with "No USB serial device attached" before the broker feed
+    // (if any) is torn down.
     const transport = await requestNativeTransport();
+    if (source === "mqtt") mqttFeed.disconnect();
+    source = "none";
+    resetState();
     await lineReader.connectAt(transport, BAUD, handleLine, onDisconnect);
-    setConnected(true);
+    manualOff = false;
+    setSource("usb", `USB ${BAUD}`);
   } catch (err) {
     // Auto-connect attempts (startup, device-attach) stay quiet when
-    // nothing is plugged in yet; a manual Connect click always reports.
+    // nothing is plugged in yet; a manual pick always reports.
     if (silent) {
-      setState("disconnected");
+      setState(source === "none" ? "disconnected" : prev);
     } else {
       setState("error");
       toast((err as Error).message);
@@ -213,19 +264,123 @@ async function connect(silent: boolean): Promise<void> {
   }
 }
 
-connectBtn.addEventListener("click", async () => {
-  if (connState === "connected") {
-    await lineReader.disconnect();
-    onDisconnect();
+async function connectMqtt(broker: Broker, silent: boolean): Promise<void> {
+  if (connecting) return;
+  connecting = true;
+  setState("connecting");
+  try {
+    await disconnectSource();
+    resetState();
+    await mqttFeed.connect(broker.url, RAW_FRAME_TOPIC, handleLine, () => {
+      toast(`broker lost: ${broker.name}`);
+      onDisconnect();
+      void rescan();
+    });
+    localStorage.setItem(REMEMBERED_KEY, broker.key);
+    manualOff = false;
+    setSource("mqtt", `MQTT ${broker.name}`);
+  } catch (err) {
+    setState(silent ? "disconnected" : "error");
+    if (!silent) toast((err as Error).message);
+  } finally {
+    connecting = false;
+  }
+}
+
+// Auto-connect policy while no source is active: the remembered broker
+// silently; otherwise offer the picker - right away on first use, after
+// REMEMBERED_WAIT_MS if a remembered broker exists but isn't advertised.
+function autoSelect(): void {
+  // An open picker means the user (or an earlier auto-offer) is choosing.
+  if (source !== "none" || connecting || manualOff || paused || picker.isOpen) return;
+  const brokers = discovery.list();
+  const remembered = localStorage.getItem(REMEMBERED_KEY);
+  const match = brokers.find((b) => b.key === remembered);
+  if (match) {
+    void connectMqtt(match, true);
     return;
   }
-  await connect(false);
+  if (brokers.length === 0 || autoPickerShown) return;
+  if (remembered && Date.now() - scanStartedAt < REMEMBERED_WAIT_MS) return;
+  autoPickerShown = true;
+  void openPicker();
+}
+
+function pickerItems(): PickerItem[] {
+  const items: PickerItem[] = [];
+  if (usbPresent) {
+    items.push({ label: "USB serial", detail: `${BAUD} baud`, pick: () => void connectUsb(false) });
+  }
+  for (const b of discovery.list()) {
+    items.push({ label: b.name, detail: b.url, pick: () => void connectMqtt(b, false) });
+  }
+  return items;
+}
+
+async function openPicker(): Promise<void> {
+  if (HAS_USB) {
+    usbPresent = await UsbSerial.listDevices()
+      .then(({ devices }) => devices.length > 0)
+      .catch(() => false);
+  }
+  picker.open(pickerItems());
+}
+
+async function rescan(): Promise<void> {
+  await discovery.stop();
+  scanStartedAt = Date.now();
+  autoPickerShown = false;
+  try {
+    await discovery.start();
+  } catch (err) {
+    toast(`mDNS: ${(err as Error).message}`);
+    return;
+  }
+  window.setTimeout(autoSelect, REMEMBERED_WAIT_MS);
+}
+
+discovery.onChange(() => {
+  if (picker.isOpen) picker.update(pickerItems());
+  autoSelect();
 });
 
-// Auto-connect: on startup if a device is already attached, and whenever
-// one is plugged in while the app is running.
-void UsbSerial.addListener("attached", () => void connect(true));
-void connect(true);
+connectBtn.addEventListener("click", async () => {
+  if (source !== "none") {
+    manualOff = true;
+    await disconnectSource();
+    return;
+  }
+  manualOff = false;
+  await openPicker();
+});
+
+// Broker feed sockets don't survive iOS suspension, and an mDNS watch in the
+// background is pointless: drop both on pause, rescan on resume - the
+// remembered broker (the one just in use) then reconnects silently. USB is
+// left alone.
+void App.addListener("appStateChange", ({ isActive }) => {
+  paused = !isActive;
+  if (paused) {
+    if (source === "mqtt") {
+      mqttFeed.disconnect();
+      onDisconnect();
+    }
+    void discovery.stop();
+  } else {
+    void rescan();
+  }
+});
+
+// Startup: USB first (Android), then the broker feed as fallback. Plugging
+// a device in later replaces the feed.
+async function start(): Promise<void> {
+  if (HAS_USB) {
+    void UsbSerial.addListener("attached", () => void connectUsb(true));
+    await connectUsb(true);
+  }
+  await rescan();
+}
+void start();
 
 void initGeolocation();
 

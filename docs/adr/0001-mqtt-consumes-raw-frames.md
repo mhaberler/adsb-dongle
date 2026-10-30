@@ -1,0 +1,3 @@
+# Broker feed consumes Raw frames, not decoded aircraft messages
+
+The sensorpod Broker publishes both Raw frames (`ihex`) and Decoded aircraft messages (`ADSB/<icao>`). The Broker feed subscribes to `ihex` only and decodes on the device through the same raw-frame path as a directly wired module. The decoded topic lacks fields the viewer relies on (`nic`, so no GNSS-quality trails), still carries the old numeric `category`, signals eviction with an empty payload instead of a tombstone, and is throttled to 1 Hz per aircraft. Decoding locally costs more traffic but gives one decode path and identical behaviour across Input sources.

@@ -436,3 +436,74 @@ body {
 .ac-list .mil {
   color: #6a1b9a;
 }
+
+/* Input source picker (source-picker.ts): bottom sheet over the map. */
+#source-picker {
+  position: absolute;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+#source-picker[hidden] {
+  display: none;
+}
+
+#source-picker .sp-sheet {
+  width: min(420px, 100%);
+  max-height: 70vh;
+  overflow-y: auto;
+  background: #fff;
+  border-radius: 14px 14px 0 0;
+  padding: 12px 12px calc(12px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)));
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.3);
+  font-size: 15px;
+}
+
+#source-picker .sp-title {
+  font-weight: 600;
+  padding: 4px 4px 8px;
+}
+
+#source-picker ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+#source-picker li button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 10px 8px;
+  border: 0;
+  border-top: 1px solid #eee;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+#source-picker li small {
+  color: #666;
+  font-size: 12px;
+}
+
+#source-picker .sp-empty {
+  padding: 10px 8px;
+  color: #666;
+}
+
+#source-picker .sp-cancel {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: #eee;
+  font: inherit;
+}

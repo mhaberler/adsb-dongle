@@ -9,6 +9,9 @@ Mode-S/ADS-B receiver module, decoding DF17/DF18 extended-squitter frames
 and emitting NDJSON (one JSON object per line) on `Serial` at 115200 baud.
 No networking, no MQTT, no display — pure UART-in, JSON-out dongle.
 
+Domain vocabulary (Input source, Serial link, Broker feed, Raw frame, ...)
+is in `CONTEXT.md`; decisions in `docs/adr/`.
+
 Note: `ADSB.md` in this repo describes a different, related integration
 (MQTT publish, `{hostname}/ADSB/{icao}` topics, m5stack-nanoc6/esp32p4-waveshare
 envs, GPIO52/53) from a sibling "sensorpod" project. That doc does not match
@@ -106,7 +109,8 @@ with a GNS5892R module (see README.md for datasheet link).
 ## Web viewer (`webapp/`)
 
 Browser-only ADS-B map viewer — Vite + vanilla TypeScript, bun package
-manager, no server. Connects over the Web Serial API and plots aircraft on
+manager, no server. Connects over the Web Serial API (or an MQTT broker
+feed, see `mqtt-feed.ts`) and plots aircraft on
 a Leaflet map (`webapp/src/map.ts`; OSM/OpenTopoMap bases + openflightmaps
 overlay, tiles cached offline — see `tile-cache.ts` below).
 
@@ -212,7 +216,22 @@ direct-wired module, not the dongle).
 - In raw mode, `main.ts` sends `#49-03\r` once on connect (GNS5892 command
   interface: DF17/18/19-only output mode) to cut the short-frame (DF4/5/
   20/21) traffic the module emits by default — harmless no-op if the
-  stream is actually coming through an ESP32 pass-through.
+  stream is actually coming through an ESP32 pass-through. Not sent on a
+  broker feed.
+- **`mqtt-feed.ts`** (`MqttFeed`): broker feed — subscribes to the
+  sensorpod's `ihex` topic (`RAW_FRAME_TOPIC`, one `*<hex>;` raw frame per
+  message) over MQTT-over-WebSocket and passes each payload to the same
+  `handleLine` a serial link feeds, so it lands in the raw-mode decode
+  path. `ADSB/<icao>` (decoded JSON) is deliberately not used (ADR 0001).
+  mqtt.js resolves to its browser ESM bundle via the `browser` export
+  condition — no Node polyfills. After `MAX_RECONNECTS` (3) failed 3 s
+  reconnects it ends the client and calls `onLost`. `brokerUrl()` builds
+  `ws(s)://host:port` + TXT `path` (default `/mqtt`); `isMixedContent()`
+  flags `ws://` from an https page, which browsers block — so the GitHub
+  Pages build can only reach `wss://` brokers. Webapp UI: URL field
+  (`localStorage` `adsb.mqttUrl`) + MQTT button in the toolbar; serial and
+  MQTT are mutually exclusive (`source` in `main.ts`). Used by the app
+  too. Tested in `mqtt-feed.test.ts`.
 - **`modes.test.ts`**: unit tests using known-good DF17 example frames from
   the [GNS5892 command interface doc](https://www.gns-electronics.de/wp-content/uploads/2019/10/GNS5892-command-interface-V1.0.pdf).
   Expected values were cross-checked by compiling and running
@@ -299,29 +318,32 @@ DF4/5/20/21 short frames, ME31 subtype 1 (surface), surface (TC 5-8) and
 GNSS-height (TC 20-22) positions, containment radius (Rc), bit-error
 correction.
 
-## Android app (`app/`)
+## Android / iOS app (`app/`)
 
-Capacitor-wrapped Android app, added because the webapp's WebUSB fallback
+Capacitor-wrapped app (Android + iOS). Android was added because the webapp's WebUSB fallback
 (above) didn't work with the user's FTDI adapter — Android WebUSB support
 for FTDI-class devices is unreliable in practice, even though the API
 exists. `app/` uses a **native plugin** instead:
 [`@leeskies/capacitor-usb-serial`](https://github.com/LeeSkies/capacitor-usb-serial),
 which wraps [mik3y/usb-serial-for-android](https://github.com/mik3y/usb-serial-for-android)
 — the same library behind the "Serial USB Terminal" Android app, confirmed
-working with this hardware. Android-only (no iOS target; the underlying
-library is Android-only).
+working with this hardware. That plugin is Android-only (its iOS
+`Package.swift` product name is also broken), so `capacitor.config.ts`
+`ios.includePlugins` leaves it out of the iOS build; iOS is broker feed
+only. Every `UsbSerial` call in `main.ts` is behind `HAS_USB`.
 
 **`app/` is a separate top-level project, not a build of `webapp/`.**
 It has its own `package.json`/`vite.config.ts`/`index.html`/`src/main.ts`,
 but imports the shared decode/map pipeline straight from `../webapp/src`
 (`transport.ts`, `protocol.ts`, `modes.ts`, `cpr.ts`, `aircraft-store.ts`,
-`map.ts`, and through it `tile-cache.ts`, `geo.ts`, `icao-country.ts` — via relative imports,
+`mqtt-feed.ts`, `map.ts`, and through it `tile-cache.ts`, `geo.ts`, `icao-country.ts` — via relative imports,
 `app/tsconfig.json` `include`s `../webapp/src` and `app/vite.config.ts`
 widens dev-server `fs.allow` to reach it). Modules under `../webapp/src`
 resolve bare imports from `app/node_modules`, so any dependency they use
-(`leaflet`, `leaflet.offline`) must be listed in **both** `package.json`s.
-**`webapp/` itself is never modified for the app** — the app
-only reads from it. `app/src/style.css` is a copy of webapp's — CSS added
+(`leaflet`, `leaflet.offline`, `mqtt`) must be listed in **both** `package.json`s.
+**`webapp/` is never modified just for the app** — the app only reads
+from it; shared code (e.g. `mqtt-feed.ts`) lives there only when the
+webapp uses it too. `app/src/style.css` is a copy of webapp's — CSS added
 there (e.g. `.tile-status`, the aircraft label/flag/view-option rules) must be copied over by hand — (plus
 `env(safe-area-inset-*)` padding for the toolbar/stats since this runs
 edge-to-edge in a native shell), and `app/src/main.ts` is a copy of
@@ -332,8 +354,9 @@ swapped for native equivalents — everything else (mode autodetect,
 ```sh
 cd app
 bun install
-bun run sync        # bun run build (tsc + vite) + bunx cap sync android
+bun run sync        # bun run build (tsc + vite) + bunx cap sync (android + ios)
 bun run android      # sync + bunx cap run android
+bun run ios          # sync + bunx cap run ios
 ```
 
 Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
@@ -348,20 +371,54 @@ Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
   `Uint8Array`s, `read()` awaits the next one. `pickDevice()`/
   `requestNativeTransport()` picks the first attached device (this app
   assumes one adapter plugged in at a time) and requests permission.
-- **`main.ts`**: same `LineReader`/mode-autodetect wiring as
-  `webapp/src/main.ts`, but `requestTransport()` is unconditional (native
-  only, no platform branching) with probe order `[921600, 115200]`
-  (FTDI-wired module is the primary case). Adds **auto-connect**: tries
-  `connect(silent: true)` on startup and on the plugin's `attached`
-  event, swallowing "no device" errors; a manual Connect click surfaces
-  errors normally. Geolocation uses `@capacitor/geolocation`'s
+- **`main.ts`**: same mode-autodetect/`handleLine` wiring as
+  `webapp/src/main.ts`; USB at fixed `BAUD` 921600 via `connectAt` (no
+  probe). Input source state machine (`source`: `none`/`usb`/`mqtt`,
+  exactly one at a time):
+  - Startup: `connectUsb(silent)` (Android), then `rescan()` (mDNS).
+    The plugin's `attached` event → `connectUsb`, which replaces a
+    broker feed (USB wins). USB unplug / broker lost → `onDisconnect` →
+    `autoSelect()` falls back to a broker.
+  - `autoSelect()`: remembered broker (`localStorage` `adsb.broker`,
+    lowercased instance name) advertised → connect silently; no
+    remembered broker → open the picker once the first broker resolves;
+    remembered but absent for `REMEMBERED_WAIT_MS` (5 s) → picker. Skipped
+    while the picker is open, while `paused`, or after a manual
+    disconnect (`manualOff`, cleared by the next tap or a successful
+    connect).
+  - The button stays a colour LED (no text); the source ("USB 921600",
+    "MQTT <broker>") goes into its title/aria-label and a toast.
+    Tap connected → disconnect; tap idle → picker.
+  - `@capacitor/app` `appStateChange`: on background, end the broker
+    feed and stop mDNS (iOS kills sockets anyway); on resume `rescan()`,
+    and the remembered broker reconnects. USB untouched. Geolocation uses `@capacitor/geolocation`'s
   `watchPosition` (its callback signature is `(position, err?)`, not the
   two-callback web API) instead of `navigator.geolocation` — the webview's
   built-in geolocation is unreliable inside Capacitor.
+- **`broker-discovery.ts`** (`BrokerDiscovery`): `@mhaberler/capacitor-zeroconf-nsd`
+  watch on `_mqtt-ws._tcp.`, keeps resolved services only (host =
+  `hostname` minus trailing dot, else first IPv4), keyed by lowercased
+  instance name (Android NSD lowercases names). `start()` clears the list
+  — NSD/Bonjour `removed` events are unreliable, a restart is the
+  refresh. Modeled on mdns-mqtt-vue3's `useMqttDiscovery`.
+- **`source-picker.ts`** (`SourcePicker`): bottom-sheet modal (CSS in
+  `app/src/style.css` only) listing USB (if attached) + brokers;
+  refreshed live from `discovery.onChange`.
+- **`capacitor.config.ts`**: `server.androidScheme: "http"` +
+  `cleartext: true` — an https WebView origin would block `ws://`
+  brokers as mixed content (changing the scheme reset the app's
+  origin-bound storage once).
+- **iOS** (`app/ios`, SPM, `DEVELOPMENT_TEAM` HLX9TTSLFS): `Info.plist`
+  has `NSLocalNetworkUsageDescription`, `NSBonjourServices`
+  (`_mqtt-ws._tcp`), ATS `NSAllowsLocalNetworking`,
+  `NSLocationWhenInUseUsageDescription`, `ITSAppUsesNonExemptEncryption`
+  false.
 - **Android manifest** (`app/android/app/src/main/AndroidManifest.xml`):
   `<uses-feature android:name="android.hardware.usb.host" android:required="false"/>`
   (`required="false"` so the app still installs on devices without USB
-  host mode), `ACCESS_COARSE_LOCATION`/`ACCESS_FINE_LOCATION`, and a
+  host mode), `ACCESS_COARSE_LOCATION`/`ACCESS_FINE_LOCATION`,
+  `ACCESS_NETWORK_STATE`/`ACCESS_WIFI_STATE`/`CHANGE_WIFI_MULTICAST_STATE`/
+  `NEARBY_WIFI_DEVICES` (mDNS), and a
   `USB_DEVICE_ATTACHED` intent-filter + `device_filter.xml` meta-data on
   `MainActivity` so plugging in a matching device offers to launch the
   app with permission pre-granted.
@@ -377,10 +434,15 @@ Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
 - **minSdk 24** in `android/variables.gradle` — required by the plugin;
   already the Capacitor-template default here, left unchanged.
 
-CI: `.github/workflows/android-apk.yml` builds a debug APK
-(`./gradlew assembleDebug` after `bun run sync`), triggered by pushing a
-`v*` tag (`git tag v0.1.0 && git push origin v0.1.0`) — publishes the APK
-as a GitHub Release (`softprops/action-gh-release`) for a stable download
-link, plus always uploads it as a workflow artifact. `workflow_dispatch`
-also available for a manual run (artifact only, no release, since there's
-no tag). Debug-signed only, no release signing configured.
+CI: `.github/workflows/app-release.yml`, triggered by pushing a `v*` tag
+(`git tag v0.1.0 && git push origin v0.1.0`) or `workflow_dispatch`
+(artifacts only, no release/TestFlight):
+- `android`: debug APK (`./gradlew assembleDebug`), debug-signed only.
+- `ios` (macos-latest, newest Xcode): unsigned `xcodebuild archive`, then
+  signed at `-exportArchive` with automatic cloud-managed signing via an
+  App Store Connect API key (`ci/ExportOptions-export.plist`, team
+  HLX9TTSLFS; secrets `ASC_KEY_P8` base64, `ASC_KEY_ID`,
+  `ASC_ISSUER_ID`) → IPA; on tags also exported with
+  `ci/ExportOptions-upload.plist` = TestFlight upload. Version = tag,
+  build number = `github.run_number`. Copied from mdns-mqtt-vue3.
+- `release` (tags): APK + IPA → GitHub Release (`softprops/action-gh-release`).
