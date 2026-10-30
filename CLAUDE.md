@@ -412,7 +412,9 @@ Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
   has `NSLocalNetworkUsageDescription`, `NSBonjourServices`
   (`_mqtt-ws._tcp`), ATS `NSAllowsLocalNetworking`,
   `NSLocationWhenInUseUsageDescription`, `ITSAppUsesNonExemptEncryption`
-  false.
+  false. Also `NSLocationAlwaysAndWhenInUseUsageDescription`, though the
+  app only asks for when-in-use: `@capacitor/geolocation` references the
+  always-API, and App Store Connect flags the build (ITMS-90683) without it.
 - **Android manifest** (`app/android/app/src/main/AndroidManifest.xml`):
   `<uses-feature android:name="android.hardware.usb.host" android:required="false"/>`
   (`required="false"` so the app still installs on devices without USB

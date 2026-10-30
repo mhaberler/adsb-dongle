@@ -37,6 +37,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Used to discover MQTT brokers on your local network via Bonjour/mDNS and receive ADS-B frames from them.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Shows your position and range rings on the aircraft map. The app only uses your location while it is open.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Shows your position and range rings on the aircraft map.</string>
 	<key>UIApplicationSceneManifest</key>
