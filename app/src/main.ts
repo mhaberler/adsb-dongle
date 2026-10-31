@@ -5,7 +5,7 @@ import { Geolocation } from "@capacitor/geolocation";
 import { UsbSerial } from "@leeskies/capacitor-usb-serial";
 import { LineReader } from "../../webapp/src/transport";
 import { requestNativeTransport } from "./transport-native";
-import { classifyLine, parseLine, parseRawFrame } from "../../webapp/src/protocol";
+import { classifyLine, parseLine, parseRawFrame, parseRawSignal } from "../../webapp/src/protocol";
 import type { StatsMessage } from "../../webapp/src/protocol";
 import { AircraftMap } from "../../webapp/src/map";
 import { AircraftStore } from "../../webapp/src/aircraft-store";
@@ -167,7 +167,7 @@ function handleRawLine(line: string): void {
     return;
   }
 
-  for (const event of rawStore.processFrame(frame)) {
+  for (const event of rawStore.processFrame(frame, parseRawSignal(line))) {
     if (event.kind === "update") map.upsert(event.data);
     else map.remove(event.hex);
   }

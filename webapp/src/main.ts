@@ -3,7 +3,7 @@ import { LineReader, type ByteTransport } from "./transport";
 import { requestWebSerialTransport } from "./transport-webserial";
 import { FtdiTransport } from "./transport-ftdi";
 import { CdcAcmTransport } from "./transport-cdcacm";
-import { classifyLine, parseLine, parseRawFrame } from "./protocol";
+import { classifyLine, parseLine, parseRawFrame, parseRawSignal } from "./protocol";
 import type { StatsMessage } from "./protocol";
 import { AircraftMap } from "./map";
 import { AircraftStore } from "./aircraft-store";
@@ -135,7 +135,7 @@ function handleRawLine(line: string): void {
     return;
   }
 
-  for (const event of rawStore.processFrame(frame)) {
+  for (const event of rawStore.processFrame(frame, parseRawSignal(line))) {
     if (event.kind === "update") map.upsert(event.data);
     else map.remove(event.hex);
   }

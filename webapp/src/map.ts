@@ -123,6 +123,7 @@ function popupHtml(
     ["emergency", ac.emergency],
     ["GNSS", gnssText(ac)],
     ["distance", dist === undefined ? undefined : `${dist.toFixed(dist < 10 ? 1 : 0)} km`],
+    ["rssi", ac.rssi === undefined ? undefined : `${ac.rssi.toFixed(1)} dBFS`],
     ["seen", `${ac.seen.toFixed(1)}s`],
   ];
   const lines = rows

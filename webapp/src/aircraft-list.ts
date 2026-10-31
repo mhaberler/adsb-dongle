@@ -18,7 +18,7 @@ export interface ListRow {
   info?: AircraftInfo; // from the aircraft database, if downloaded
 }
 
-export type SortKey = "flight" | "alt" | "gs" | "dist" | "gnss";
+export type SortKey = "flight" | "alt" | "gs" | "dist" | "rssi" | "gnss";
 
 // Altitude filter in flight levels (100 ft); null = no limit.
 export interface AltBand {
@@ -42,6 +42,8 @@ const SORT_VALUE: Record<SortKey, (r: ListRow) => string | number | undefined> =
   alt: (r) => altOf(r.ac),
   gs: (r) => r.ac.gs,
   dist: (r) => r.distKm,
+  // Negated: ascending (the default on a fresh column) = strongest first.
+  rssi: (r) => (r.ac.rssi === undefined ? undefined : -r.ac.rssi),
   gnss: (r) => {
     const q = gnssQuality(r.ac);
     return q ? GNSS_RANK[q] : undefined;
@@ -90,6 +92,7 @@ const COLUMNS: [SortKey, string][] = [
   ["alt", "Alt"],
   ["gs", "Speed"],
   ["dist", "Dist"],
+  ["rssi", "RSSI"],
   ["gnss", "GNSS"],
 ];
 
@@ -261,6 +264,9 @@ function rowHtml({ ac, distKm, info }: ListRow, follow: string | null): string {
         ? '<span class="sub">no pos</span>'
         : "–";
 
+  const rssiCell =
+    ac.rssi === undefined ? "–" : `<span title="${ac.rssi.toFixed(1)} dBFS">${Math.round(ac.rssi)}</span>`;
+
   const q = gnssQuality(ac);
   const gnssCell = q ? `<span class="gnss-dot gnss-${q}" title="${q} (${gnssValues(ac)})"></span>` : "–";
 
@@ -271,7 +277,7 @@ function rowHtml({ ac, distKm, info }: ListRow, follow: string | null): string {
   return (
     `<tr data-hex="${esc(ac.hex)}" class="${cls}" title="${title}">` +
     `<td>${flag}<b>${esc(callsign(ac))}</b><div class="sub">${sub}</div></td>` +
-    `<td>${altCell}</td><td>${speedCell}</td><td>${distCell}</td><td>${gnssCell}</td></tr>`
+    `<td>${altCell}</td><td>${speedCell}</td><td>${distCell}</td><td>${rssiCell}</td><td>${gnssCell}</td></tr>`
   );
 }
 

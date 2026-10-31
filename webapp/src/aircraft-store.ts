@@ -56,7 +56,13 @@ interface AircraftState {
 
   lastSeenMs: number;
   messages: number;
+  signal: number[]; // last RSSI_WINDOW signal levels, ring
+  signalIdx: number;
 }
+
+// readsb: rssi = 10*log10(mean of the last 8 signal levels + 1.125e-5),
+// same as the sensorpod's ADSB/{icao} rssi.
+const RSSI_WINDOW = 8;
 
 // NIC (0-11) of an airborne position from its type code and the NIC
 // supplements - port of src/nic.h adsb_compute_nic(), see there; keep in
@@ -108,7 +114,9 @@ export class AircraftStore {
 
   // Feed a raw 14-byte Mode-S frame (already hex-decoded). Returns store
   // events (update/remove) produced by this frame, if any.
-  processFrame(msg: Uint8Array): StoreEvent[] {
+  // `signal` is the frame's signal level (protocol.ts parseRawSignal), if
+  // the line carried one.
+  processFrame(msg: Uint8Array, signal?: number): StoreEvent[] {
     this.framesSeen++;
 
     const mm = decodeModeS(msg);
@@ -133,11 +141,17 @@ export class AircraftStore {
         oddMs: 0,
         lastSeenMs: now,
         messages: 0,
+        signal: [],
+        signalIdx: 0,
       };
       this.table.set(mm.icao, ac);
     }
     ac.lastSeenMs = now;
     ac.messages++;
+    if (signal !== undefined) {
+      ac.signal[ac.signalIdx] = signal;
+      ac.signalIdx = (ac.signalIdx + 1) % RSSI_WINDOW;
+    }
 
     this.applyMessage(ac, mm, now);
 
@@ -264,6 +278,10 @@ export class AircraftStore {
         msg.sil_type = ac.silType ? "persample" : "perhour";
       }
       if (ac.gva !== undefined) msg.gva = ac.gva;
+    }
+    if (ac.signal.length) {
+      const mean = ac.signal.reduce((a, b) => a + b, 0) / ac.signal.length;
+      msg.rssi = Math.round(10 * Math.log10(mean + 1.125e-5) * 10) / 10;
     }
     return msg;
   }

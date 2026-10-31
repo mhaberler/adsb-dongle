@@ -123,7 +123,9 @@ MQTT-over-WebSocket broker: a sensorpod publishes every received frame
 (`*<hex>;`) on topic `ihex`. Enter the broker's WebSocket URL in the
 toolbar (default `ws://esp32p4-e185df.local:8080/mqtt`, remembered) and
 click **MQTT**. Frames go through the same in-browser decoder as a
-directly wired module. Serial and MQTT are exclusive - connecting one
+directly wired module. If the pod sends RTL-SDR frames with signal bytes
+(`+SS<hex>;`), each aircraft also gets an RSSI in dBFS (readsb method,
+uncalibrated), shown in the list and popup. Serial and MQTT are exclusive - connecting one
 drops the other.
 
 **Limitation:** browsers refuse `ws://` from an `https://` page (mixed

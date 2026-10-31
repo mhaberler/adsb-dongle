@@ -127,7 +127,16 @@ bun test            # decoder, NIC, display, list, database + geo unit tests, no
 `protocol.ts` `parseLine`, rendered directly via `map.ts`); `*` → raw
 ASCII-hex Mode-S frames from a GNS5892R/Rextron module wired directly to a
 USB-UART adapter (921600 baud) — decoded **entirely in the browser**, no
-firmware involved.
+firmware involved. `+SS<hex>;` is also a raw frame (sensorpod RTL-SDR
+frames on `ihex`, signal on): `parseRawFrame` strips `SS`,
+`parseRawSignal` turns it into a signal level `(SS/255)²` (readsb Beast
+scale; a real GNS5892R in mode 3+ may scale it differently — we put it in
+`*` mode). `AircraftStore.processFrame(msg, signal)` keeps the last 8
+levels per aircraft and emits `rssi` = `10·log10(mean + 1.125e-5)` dBFS,
+rounded to 0.1 — identical to readsb and the sensorpod's `ADSB/{icao}`
+`rssi`. Kept until eviction; uncalibrated (no dBm, the gain isn't in
+`ihex`). Shown in the list (RSSI column, sorted strongest first) and
+popup. Tested in `protocol.test.ts` and `nav.test.ts`.
 
 **Transport layer** (`transport.ts` + three `transport-*.ts` drivers):
 `navigator.serial` (Web Serial) exists only on desktop Chrome/Edge —
@@ -274,8 +283,9 @@ direct-wired module, not the dongle).
   bottom that opens into a bottom sheet and closes on row click (CSS in
   both style.css files, safe-area aware). Re-rendered once a second by
   `AircraftMap` (`LIST_TICK_MS`), not per frame; clicks via delegation on
-  `tbody`. Pure, tested helpers: `sortRows` (missing values last in both
-  directions), `matchesQuery`, `inBand` (flight levels; no altitude =
+  `tbody`. Columns Flight/Alt/Speed/Dist/RSSI/GNSS (RSSI sort value is
+  negated so the default ascending order = strongest first). Pure, tested
+  helpers: `sortRows` (missing values last in both directions), `matchesQuery`, `inBand` (flight levels; no altitude =
   outside an active band). Settings (open, sort, FL band) in
   `localStorage` `adsb.list`. Tested in `aircraft-list.test.ts`.
 - **`aircraft-db.ts`** (`AircraftDb`): Mictronics database via
