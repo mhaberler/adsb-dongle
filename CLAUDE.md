@@ -107,7 +107,7 @@ with a GNS5892R module (see README.md for datasheet link).
 
 Browser-only ADS-B map viewer — Vite + vanilla TypeScript, bun package
 manager, no server. Connects over the Web Serial API and plots aircraft on
-a Leaflet map (`webapp/src/map.ts`; OSM/OpenTopoMap bases + openflightmaps
+a Leaflet map (`webapp/src/map.ts`; OSM/OpenTopoMap/Esri World Imagery bases + openflightmaps
 overlay, tiles cached offline — see `tile-cache.ts` below).
 
 ```sh
@@ -193,8 +193,9 @@ direct-wired module, not the dongle).
 - **`tile-cache.ts`** (used only by `map.ts`, so the Android app gets it
   too): offline tile cache on top of
   [`leaflet.offline`](https://github.com/allartk/leaflet.offline)
-  (IndexedDB db `leaflet.offline`). `LAYER_DEFS`: bases OSM (default) and
-  OpenTopoMap, overlay openflightmaps aero — selection persisted in
+  (IndexedDB db `leaflet.offline`). `LAYER_DEFS`: bases OSM (default),
+  OpenTopoMap and Esri World Imagery (satellite; ArcGIS URL order
+  `{z}/{y}/{x}`), overlay openflightmaps aero — selection persisted in
   `localStorage` (`adsb.layers`), switched via a stock `L.control.layers`.
   Every layer has `maxNativeZoom` = its `nativeMax` (12; OFM 11), so higher
   zooms are upscaled rather than fetched — keeps offline and online

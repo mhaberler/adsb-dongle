@@ -68,7 +68,7 @@ list and decoder internals.
 `webapp/` is a browser-only ADS-B viewer: connects to the dongle over the
 [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API)
 (no server, no native app) and plots live aircraft on a Leaflet map
-(OpenStreetMap or OpenTopoMap base, optional openflightmaps overlay,
+(OpenStreetMap, OpenTopoMap or Esri satellite base, optional openflightmaps overlay,
 [cached for offline use](#map-layers-and-offline-cache)) with
 [trails, labels, range rings and lead vectors](#aircraft-display), styled after [airplanejs](https://github.com/watson/airplanejs). Built
 with Vite + vanilla TypeScript.
@@ -201,9 +201,10 @@ so they also render on Windows, which has no flag emoji.
 
 ### Map layers and offline cache
 
-The layer switcher (top left) offers two base maps —
-[OpenStreetMap](https://www.openstreetmap.org) (default) and
-[OpenTopoMap](https://opentopomap.org) — plus an
+The layer switcher (top left) offers three base maps —
+[OpenStreetMap](https://www.openstreetmap.org) (default),
+[OpenTopoMap](https://opentopomap.org) and Esri World Imagery
+(satellite) — plus an
 [openflightmaps](https://www.openflightmaps.org) aeronautical overlay.
 The selection is remembered across reloads.
 

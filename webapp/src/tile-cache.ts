@@ -48,6 +48,18 @@ export const LAYER_DEFS: LayerDef[] = [
     overlay: false,
   },
   {
+    id: "esri",
+    name: "Esri World Imagery",
+    // ArcGIS tile order is z/y/x, not z/x/y.
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attribution:
+      "Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community",
+    nativeMax: 12,
+    minZoom: 0,
+    estKb: 25,
+    overlay: false,
+  },
+  {
     id: "ofm",
     name: "openflightmaps",
     url: "https://nwy-tiles-api.prod.newaydata.com/tiles/{z}/{x}/{y}.png?path=latest/aero/latest",
