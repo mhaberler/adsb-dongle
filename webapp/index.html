@@ -2,18 +2,23 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#1d3557" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ADS-B Dongle Map</title>
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <!-- use-credentials: behind the server's login gate the manifest
+         request must carry the session cookie, or it gets the login page. -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <title>ADS-B Dongle</title>
   </head>
   <body>
     <div id="app">
       <div id="map"></div>
       <div id="toolbar">
-        <button id="connect-btn" type="button">Connect</button>
-        <span id="conn-status">disconnected</span>
-        <span id="geo-status"></span>
+        <button id="connect-btn" type="button" data-state="disconnected"
+                title="Connect" aria-label="Connect"></button>
       </div>
+      <div id="status-msg"></div>
       <div id="stats"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>

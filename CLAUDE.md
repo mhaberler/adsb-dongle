@@ -106,7 +106,7 @@ with a GNS5892R module (see README.md for datasheet link).
 ## Web viewer (`webapp/`)
 
 Browser-only ADS-B map viewer — Vite + vanilla TypeScript, bun package
-manager, no server. Connects over the Web Serial API and plots aircraft on
+manager, static files only (no backend; hosted as a PWA, see below). Connects over the Web Serial API and plots aircraft on
 a Leaflet map (`webapp/src/map.ts`; OSM/OpenTopoMap/Esri World Imagery bases + openflightmaps
 overlay, tiles cached offline — see `tile-cache.ts` below).
 
@@ -116,7 +116,35 @@ bun install
 bun dev             # http://localhost:5173
 bun run build       # tsc + vite build -> webapp/dist
 bun test            # decoder, NIC, display, list, database + geo unit tests, no hardware needed
+bun run preview     # serve dist on http://localhost:4173 (PWA/offline test)
+bun run deploy      # test + build + rsync to Hetzner (scripts/deploy-hetzner.sh)
+bun run rollback    # restore the previous deploy (/apps/adsb.prev)
 ```
+
+**PWA / hosting**: `base: "./"` (relative), so the same build runs on
+the Hetzner vhost `adsb.wetterheidi.de` (`/apps/adsb`, nginx + certbot,
+Pförtner login gate by default — `PFOERTNER` in the deploy script),
+under `bun run preview`, or any subpath. GitHub Pages deploy was
+removed. `vite.config.ts` `serviceWorker()` writes `dist/sw.js` after
+the build from `src/sw-template.js` (plain JS, not bundled): precaches
+every dist file, cache name `adsb-<hash over template + files>`,
+cache-first for same-origin GETs (`ignoreVary` — the crossorigin module
+script request carries `Origin`, precache fetches don't, and servers
+may send `Vary: Origin`), navigations get the cached `./`; cross-origin
+(tiles, aircraft DB) untouched. Install fails on a redirected response
+(login gate) rather than caching the login page. `main.ts` registers it
+in production only and toasts on update. Manifest `public/manifest.webmanifest`
+(linked with `crossorigin="use-credentials"` for the gate), icons
+`public/icon.svg` → `icon-192.png`/`icon-512.png` (rendered with
+`rsvg-convert`). User guide (German): `docs/PWA.md`.
+
+**UI = the Android app's**: same `index.html` structure (colour-dot
+`#connect-btn` with `data-state` disconnected/connecting/connected/error,
+`#status-msg` toast) and one shared `webapp/src/style.css` (the app
+imports it, no copy). `main.ts` auto-connects silently on startup and on
+`navigator.serial`/`navigator.usb` `connect` events, but only to devices
+granted on an earlier visit (`getPorts()`/`getDevices()`); a click opens
+the picker and reports errors (closing the picker isn't one).
 
 **Two input modes, auto-detected by first line character** (`webapp/src/main.ts`
 `handleLine`): `{` → NDJSON from this repo's dongle firmware (parsed by
@@ -241,8 +269,8 @@ direct-wired module, not the dongle).
   `no-labels` class on the map container. Range rings (`RINGS_KM`) follow
   `setMyLocation`. The Twemoji flag font is registered from TS via
   `FontFace` (so the app gets it without CSS changes); the `.flag`,
-  `.plane-label`, `.ring-label` and view-option CSS is in both style.css
-  files.
+  `.plane-label`, `.ring-label` and view-option CSS is in
+  `webapp/src/style.css` (shared with the app).
   FL filter: `setHidden()` takes marker, trail group and lead vector off
   the map for tracks outside `list.band` (re-checked per `upsert` and on
   band change); hidden tracks keep recording and are skipped by the GNSS
@@ -254,7 +282,7 @@ direct-wired module, not the dongle).
   map container (`#app`), so both webapp and app get it without
   index.html changes. Top right on wide screens; at ≤ 600 px a pill at the
   bottom that opens into a bottom sheet and closes on row click (CSS in
-  both style.css files, safe-area aware). Re-rendered once a second by
+  `webapp/src/style.css`, safe-area aware). Re-rendered once a second by
   `AircraftMap` (`LIST_TICK_MS`), not per frame; clicks via delegation on
   `tbody`. Pure, tested helpers: `sortRows` (missing values last in both
   directions), `matchesQuery`, `inBand` (flight levels; no altitude =
@@ -322,13 +350,17 @@ widens dev-server `fs.allow` to reach it). Modules under `../webapp/src`
 resolve bare imports from `app/node_modules`, so any dependency they use
 (`leaflet`, `leaflet.offline`) must be listed in **both** `package.json`s.
 **`webapp/` itself is never modified for the app** — the app
-only reads from it. `app/src/style.css` is a copy of webapp's — CSS added
-there (e.g. `.tile-status`, the aircraft label/flag/view-option rules) must be copied over by hand — (plus
-`env(safe-area-inset-*)` padding for the toolbar/stats since this runs
-edge-to-edge in a native shell), and `app/src/main.ts` is a copy of
+only reads from it. Styling is shared: `app/src/main.ts` imports
+`../../webapp/src/style.css` directly (no copy; its
+`var(--safe-area-inset-*, env(...))` padding serves the edge-to-edge
+native shell and the installed PWA alike). `app/index.html` and
+webapp's have the same body markup. `app/src/main.ts` is a copy of
 webapp's `main.ts` with the transport section and geolocation source
-swapped for native equivalents — everything else (mode autodetect,
-`#49-03\r`, stats overlay, TTL sweep) is identical logic, just re-wired.
+swapped for native equivalents, and two deliberate differences: fixed
+921600 baud via `connectAt` (no probe — its close+reopen raced the
+native driver's teardown) and the `#49-03\r` command commented out.
+Everything else (mode autodetect, toast, colour-dot state, auto-connect,
+stats overlay, TTL sweep) is the same logic.
 
 ```sh
 cd app

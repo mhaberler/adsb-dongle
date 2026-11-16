@@ -8,6 +8,14 @@ export async function requestWebSerialTransport(): Promise<ByteTransport> {
   return new WebSerialTransport(port);
 }
 
+// A port the user already granted on an earlier visit, if one is plugged
+// in now - no picker, so it can run without a click (auto-connect).
+export async function grantedWebSerialTransport(): Promise<ByteTransport | null> {
+  if (!("serial" in navigator)) return null;
+  const [port] = await navigator.serial.getPorts();
+  return port ? new WebSerialTransport(port) : null;
+}
+
 class WebSerialTransport implements ByteTransport {
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;

@@ -1,4 +1,4 @@
-import "./style.css";
+import "../../webapp/src/style.css";
 import { Geolocation } from "@capacitor/geolocation";
 import { UsbSerial } from "@leeskies/capacitor-usb-serial";
 import { LineReader } from "../../webapp/src/transport";

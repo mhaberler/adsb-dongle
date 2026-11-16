@@ -1,6 +1,6 @@
 import "./style.css";
 import { LineReader, type ByteTransport } from "./transport";
-import { requestWebSerialTransport } from "./transport-webserial";
+import { grantedWebSerialTransport, requestWebSerialTransport } from "./transport-webserial";
 import { FtdiTransport } from "./transport-ftdi";
 import { CdcAcmTransport } from "./transport-cdcacm";
 import { classifyLine, parseLine, parseRawFrame } from "./protocol";
@@ -9,37 +9,62 @@ import { AircraftMap } from "./map";
 import { AircraftStore } from "./aircraft-store";
 
 const connectBtn = document.querySelector<HTMLButtonElement>("#connect-btn")!;
-const connStatus = document.querySelector<HTMLSpanElement>("#conn-status")!;
+const statusMsg = document.querySelector<HTMLDivElement>("#status-msg")!;
 const statsEl = document.querySelector<HTMLDivElement>("#stats")!;
-const geoStatus = document.querySelector<HTMLSpanElement>("#geo-status")!;
+
+let toastTimer: number | undefined;
+
+// Transient message over the map. Empty text hides it immediately.
+function toast(msg: string, ms = 4000): void {
+  window.clearTimeout(toastTimer);
+  if (!msg) {
+    statusMsg.classList.remove("show");
+    return;
+  }
+  statusMsg.textContent = msg;
+  statusMsg.classList.add("show");
+  toastTimer = window.setTimeout(() => statusMsg.classList.remove("show"), ms);
+}
 
 const map = new AircraftMap("map");
 const lineReader = new LineReader();
 
-// Web Serial (navigator.serial) is desktop-only - Android Chrome has no
-// such API at all, so there we fall back to WebUSB with hand-rolled
-// FTDI and CDC-ACM drivers (transport-ftdi.ts, transport-cdcacm.ts).
 // Baud probe order favors the direct-wired module's 921600 on the WebUSB
 // path (Android + WebUSB almost always means the FTDI-adapted module, not
 // the ESP32 dongle) and the dongle's 115200 first on Web Serial (desktop).
-async function requestTransport(): Promise<{ transport: ByteTransport; probeOrder: number[] }> {
+const SERIAL_PROBE = [115200, 921600];
+const USB_PROBE = [921600, 115200];
+
+const USB_FILTERS: USBDeviceFilter[] = [
+  { vendorId: 0x0403 }, // FTDI
+  { classCode: 0x02 }, // CDC comm interface
+  { classCode: 0xef }, // composite/IAD (covers most CDC-ACM boards)
+];
+
+function usbTransport(device: USBDevice): ByteTransport {
+  return FtdiTransport.matches(device) ? new FtdiTransport(device) : new CdcAcmTransport(device);
+}
+
+type Pick = { transport: ByteTransport; probeOrder: number[] };
+
+// Web Serial (navigator.serial) is desktop-only - Android Chrome has no
+// such API at all, so there we fall back to WebUSB with hand-rolled
+// FTDI and CDC-ACM drivers (transport-ftdi.ts, transport-cdcacm.ts).
+// `ask` = show the browser's device picker (needs a user click); without
+// it only devices granted on an earlier visit are used (auto-connect).
+async function findTransport(ask: boolean): Promise<Pick | null> {
   if (navigator.serial) {
-    return { transport: await requestWebSerialTransport(), probeOrder: [115200, 921600] };
+    const transport = ask ? await requestWebSerialTransport() : await grantedWebSerialTransport();
+    return transport && { transport, probeOrder: SERIAL_PROBE };
   }
   if (navigator.usb) {
-    const device = await navigator.usb.requestDevice({
-      filters: [
-        { vendorId: 0x0403 }, // FTDI
-        { classCode: 0x02 }, // CDC comm interface
-        { classCode: 0xef }, // composite/IAD (covers most CDC-ACM boards)
-      ],
-    });
-    const transport: ByteTransport = FtdiTransport.matches(device)
-      ? new FtdiTransport(device)
-      : new CdcAcmTransport(device);
-    return { transport, probeOrder: [921600, 115200] };
+    const device = ask
+      ? await navigator.usb.requestDevice({ filters: USB_FILTERS })
+      : (await navigator.usb.getDevices())[0];
+    return device ? { transport: usbTransport(device), probeOrder: USB_PROBE } : null;
   }
-  throw new Error("No Web Serial or WebUSB support in this browser");
+  if (ask) throw new Error("No Web Serial or WebUSB in this browser - use Chrome or Edge");
+  return null;
 }
 
 if ("geolocation" in navigator) {
@@ -48,7 +73,6 @@ if ("geolocation" in navigator) {
     (pos) => {
       geoFailStreak = 0;
       map.setMyLocation(pos.coords.latitude, pos.coords.longitude);
-      geoStatus.textContent = "";
     },
     (err) => {
       // PERMISSION_DENIED(1) / POSITION_UNAVAILABLE(2) / TIMEOUT(3).
@@ -56,14 +80,12 @@ if ("geolocation" in navigator) {
       // A first-fix TIMEOUT/POSITION_UNAVAILABLE is common while the OS
       // location backend warms up, so don't alarm on a single miss.
       geoFailStreak++;
-      if (err.code === GeolocationPositionError.PERMISSION_DENIED || geoFailStreak >= 3) {
-        geoStatus.textContent = `location: ${err.message}`;
+      if (err.code === GeolocationPositionError.PERMISSION_DENIED || geoFailStreak === 3) {
+        toast(`location: ${err.message}`);
       }
     },
     { enableHighAccuracy: false, maximumAge: 30000, timeout: 20000 },
   );
-} else {
-  geoStatus.textContent = "location: not supported";
 }
 
 type StreamMode = "unknown" | "ndjson" | "raw";
@@ -83,9 +105,23 @@ function renderStats(s: StatsMessage): void {
   ].join("\n");
 }
 
+type ConnState = "disconnected" | "connecting" | "connected" | "error";
+
+// The button is a bare colour swatch, so connection state lives here rather
+// than being inferred from its label.
+let connState: ConnState = "disconnected";
+let connecting = false;
+
+function setState(state: ConnState): void {
+  connState = state;
+  connectBtn.dataset.state = state;
+  const label = state === "connected" ? "Disconnect" : "Connect";
+  connectBtn.title = label;
+  connectBtn.setAttribute("aria-label", label);
+}
+
 function setConnected(connected: boolean): void {
-  connStatus.textContent = connected ? "connected" : "disconnected";
-  connectBtn.textContent = connected ? "Disconnect" : "Connect";
+  setState(connected ? "connected" : "disconnected");
 }
 
 // Used only during baud auto-probe: a line is "valid" if it's a recognized
@@ -179,19 +215,57 @@ function onDisconnect(): void {
   resetState();
 }
 
+async function connect(ask: boolean): Promise<void> {
+  if (connecting || connState === "connected") return;
+  connecting = true;
+  setState("connecting");
+  try {
+    resetState();
+    const pick = await findTransport(ask);
+    if (!pick) {
+      setState("disconnected");
+      return;
+    }
+    await lineReader.connect(pick.transport, pick.probeOrder, isRecognizedLine, handleLine, onDisconnect);
+    setConnected(true);
+  } catch (err) {
+    // Auto-connect attempts (startup, device plugged in) stay quiet; a
+    // Connect click always reports. Closing the picker without choosing
+    // a device (NotFoundError) is not an error either.
+    if (!ask || (err as DOMException).name === "NotFoundError") {
+      setState("disconnected");
+    } else {
+      setState("error");
+      toast((err as Error).message);
+    }
+  } finally {
+    connecting = false;
+  }
+}
+
 connectBtn.addEventListener("click", async () => {
-  if (connectBtn.textContent === "Disconnect") {
+  if (connState === "connected") {
     await lineReader.disconnect();
     onDisconnect();
     return;
   }
-
-  try {
-    resetState();
-    const { transport, probeOrder } = await requestTransport();
-    await lineReader.connect(transport, probeOrder, isRecognizedLine, handleLine, onDisconnect);
-    setConnected(true);
-  } catch (err) {
-    connStatus.textContent = `error: ${(err as Error).message}`;
-  }
+  await connect(true);
 });
+
+// Auto-connect, like the Android app: on startup and whenever a device is
+// plugged in - but only devices the user already picked once (browsers
+// never hand out unpicked devices without a click).
+navigator.serial?.addEventListener("connect", () => void connect(false));
+navigator.usb?.addEventListener("connect", () => void connect(false));
+void connect(false);
+
+// PWA: offline cache (sw.js is generated by the build, so not in dev).
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (hadController) toast("Update installed - reload to use it", 8000);
+  });
+  navigator.serviceWorker.register("./sw.js").catch((err: Error) => {
+    toast(`offline mode unavailable: ${err.message}`);
+  });
+}
