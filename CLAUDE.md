@@ -169,11 +169,24 @@ firmware involved.
   `write`/`setOnDisconnect`) all three drivers implement, plus `LineReader`
   — the transport-agnostic baud auto-probe (opens at each rate in the
   caller-supplied `probeOrder`, watches `PROBE_WINDOW_MS` (2 s) for a line
-  matching `isValidLine`) and NDJSON/raw-frame line-splitting logic,
-  shared across all three transports.
+  matching `isValidLine`, falls back to the last rate) and NDJSON/raw-frame
+  line-splitting logic, shared across all three transports. The probe
+  discards everything read in the first `PROBE_SETTLE_MS` (300 ms): an
+  FTDI chip keeps receiving at the old rate while closed and hands over
+  ~512 bytes of perfectly valid frames on the next open, which locked
+  115200 for the 921600 module. `main.ts` passes `protocol.ts`
+  `isPlausibleLine` (complete `*hex;` frame, JSON object, or printable
+  `#` reply) — `classifyLine`'s first-character check alone matched line
+  noise. Covered by `transport.test.ts` (fake FTDI) and
+  `protocol.test.ts`.
 - **`transport-webserial.ts`**: thin `ByteTransport` wrapper around
   `navigator.serial` (desktop). `requestWebSerialTransport()` calls
-  `requestPort()`.
+  `requestPort()`. `open()` follows Chrome's DTR+RTS assert with an
+  esptool-style reset (`resetIntoFirmware`: DTR=0/RTS=1, 100 ms,
+  DTR=0/RTS=0) — on Windows the ESP32-C6's USB-Serial/JTAG otherwise
+  ended up silent in ROM download mode (suspected: driver sets the two
+  lines one after the other). Every connect (and each probe rate)
+  therefore reboots the dongle; no-op for an FTDI-wired module.
 - **`transport-ftdi.ts`**: hand-rolled WebUSB driver for FTDI FT230X/
   FT232R-family chips (the FTDI USB-UART adapter used to wire a module
   directly, per README.md) — no vendor SDK, protocol is the well-known

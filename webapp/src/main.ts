@@ -3,7 +3,7 @@ import { LineReader, type ByteTransport } from "./transport";
 import { grantedWebSerialTransport, requestWebSerialTransport } from "./transport-webserial";
 import { FtdiTransport } from "./transport-ftdi";
 import { CdcAcmTransport } from "./transport-cdcacm";
-import { classifyLine, parseLine, parseRawFrame } from "./protocol";
+import { classifyLine, isPlausibleLine, parseLine, parseRawFrame } from "./protocol";
 import type { StatsMessage } from "./protocol";
 import { AircraftMap } from "./map";
 import { AircraftStore } from "./aircraft-store";
@@ -125,9 +125,10 @@ function setConnected(connected: boolean): void {
 }
 
 // Used only during baud auto-probe: a line is "valid" if it's a recognized
-// stream shape (NDJSON, raw frame, or a module command reply).
+// stream shape (NDJSON, raw frame, or a module command reply) - strictly,
+// so that line noise at a wrong baud rate can't lock that rate.
 function isRecognizedLine(line: string): boolean {
-  return classifyLine(line) !== "unknown";
+  return isPlausibleLine(line);
 }
 
 function handleNdjsonLine(line: string): void {

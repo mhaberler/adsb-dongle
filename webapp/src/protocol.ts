@@ -89,6 +89,31 @@ export function classifyLine(line: string): StreamLineKind {
   return "unknown";
 }
 
+// Strict check for the baud auto-probe: is this line really one of the
+// stream shapes, not line noise? At a wrong baud rate the bytes are
+// garbage, and sooner or later a garbage "line" starts with "*", "#" or
+// "{" - classifyLine() alone then locks the wrong rate. So: a complete
+// raw frame (*<14 or 28 hex>;), a JSON object, or a printable-ASCII
+// command reply.
+export function isPlausibleLine(line: string): boolean {
+  const trimmed = line.trim();
+  switch (classifyLine(trimmed)) {
+    case "rawframe":
+      return /^\*(?:[0-9A-Fa-f]{14}|[0-9A-Fa-f]{28});$/.test(trimmed);
+    case "ndjson":
+      try {
+        const v = JSON.parse(trimmed);
+        return typeof v === "object" && v !== null;
+      } catch {
+        return false;
+      }
+    case "command-reply":
+      return /^#[\x20-\x7e]+$/.test(trimmed);
+    default:
+      return false;
+  }
+}
+
 // Decodes a raw frame line's hex payload into bytes. Returns null if the
 // line isn't well-formed (wrong length, non-hex characters) — the 14-byte
 // output is zero-padded same as the module does for 56-bit short frames.
