@@ -60,7 +60,10 @@ e.g. `lat`/`lon`/`seen_pos` only appear after a valid even/odd CPR pair,
 status message. `category` is the emitter category the aircraft
 broadcasts, as in readsb (`"A3"` large, `"A7"` rotorcraft, `"B2"`
 balloon …); `nic` is the integrity category (0-11) of the last position,
-derived from its type code. See [CLAUDE.md](CLAUDE.md) for the full field
+derived from its type code. The vertical rate (ft/min) is published as
+`baro_rate` or `geom_rate`, depending on whether the aircraft reports it
+from its barometric or its GNSS source (readsb's names). `squawk` is the
+four-digit code as a string (`"7700"`). See [CLAUDE.md](CLAUDE.md) for the full field
 list and decoder internals.
 
 ## Web viewer

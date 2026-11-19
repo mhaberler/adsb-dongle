@@ -12,6 +12,16 @@
 //  - ME9-18 (airborne position): ME bit 8 as nic_b - NIC supplement-B in
 //    ADS-B version 2, the single-antenna flag in versions 0/1. Combined
 //    with the type code and NIC-A into NIC by the caller (adsb.cpp).
+//  - decode_ac12_field(): Q=0 (100 ft Gillham code, older GA altitude
+//    encoders) decoded like readsb's decodeAC12Field()/modeAToModeC();
+//    the original returned 0. Undecodable fields give
+//    MODE_S_INVALID_ALTITUDE, altitude_valid = 0.
+//  - ME19: raw speed/vertical-rate/geo-delta values are offset by one,
+//    0 = no information (readsb's decodeESAirborneVelocity()). velocity
+//    (kt, x4 for supersonic subtype 2), vert_rate (ft/min, signed) and
+//    geo_minus_baro (ft, signed) are scaled values with their own
+//    *_valid flags; vertical rate and geo delta decoded for subtypes 1-4.
+//  - ME28 squawk (es_squawk) hex-coded like readsb: 7700 -> 0x7700.
 // See sensorpod ADSB.md for details.
 #ifndef __MODE_S_DECODER_H
 #define __MODE_S_DECODER_H
@@ -27,6 +37,7 @@
 #define MODE_S_LONG_MSG_BYTES (112 / 8)
 #define MODE_S_UNIT_FEET 0
 #define MODE_S_UNIT_METERS 1
+#define MODE_S_INVALID_ALTITUDE (-9999) // decode_ac12_field(): no altitude
 
 // Program state
 typedef struct {
@@ -68,16 +79,18 @@ struct mode_s_msg {
   int nic_b;                // ME bit 8 (airborne position), see top.
   char flight[9];           // 8 chars flight number.
   int ew_dir;               // 0 = East, 1 = West.
-  int ew_velocity;          // E/W velocity.
+  int ew_velocity;          // E/W velocity, knots (unsigned).
   int ns_dir;               // 0 = North, 1 = South.
-  int ns_velocity;          // N/S velocity.
-  int vert_rate_source;     // Vertical rate source.
-  int vert_rate_sign;       // Vertical rate sign.
-  int vert_rate;            // Vertical rate.
-  int velocity;             // Computed from EW and NS velocity.
-  int geo_minus_baro_valid; // 1 if geo_minus_baro is present (ME19 sub 1/2).
+  int ns_velocity;          // N/S velocity, knots (unsigned).
+  int vert_rate_source;     // Vertical rate source: 1 = baro, 0 = GNSS.
+  int vert_rate_sign;       // Vertical rate sign (1 = descending).
+  int vert_rate_valid;      // 1 if vert_rate is present.
+  int vert_rate;            // Vertical rate, ft/min, signed.
+  int velocity_valid;       // 1 if velocity/heading (sub 1/2) are present.
+  int velocity;             // Ground speed, knots, from EW and NS velocity.
+  int geo_minus_baro_valid; // 1 if geo_minus_baro is present.
   int geo_minus_baro_sign;  // 1 = GNSS alt below baro alt.
-  int geo_minus_baro;       // |geometric - barometric| altitude, feet.
+  int geo_minus_baro;       // geometric - barometric altitude, feet, signed.
 
   // ME31 (Operational Status), mesub 0 (airborne) only, version 1/2.
   int opstatus_valid;   // 1 if the fields below are populated.
@@ -100,8 +113,9 @@ struct mode_s_msg {
                     // 4=no comms(7600),5=unlawful interference(7500),
                     // 6=downed aircraft (DO-260B Table 2-42).
   int es_squawk_valid;
-  int es_squawk; // Emergency squawk (from the ME28 ID13 field), same
-                 // decimal-as-octal convention as `identity` below.
+  int es_squawk; // Squawk from the ME28 ID13 field, hex-coded
+                 // (7700 -> 0x7700, print with "%04x"), unlike `identity`
+                 // below (decimal digits, 7700 -> 7700).
 
   // DF4, DF5, DF20, DF21
   int fs;       // Flight status for DF4,5,20,21
@@ -111,6 +125,7 @@ struct mode_s_msg {
 
   // Fields used by multiple message types.
   int altitude, unit;
+  int altitude_valid; // ME9-18 only: 0 if the AC12 field held no altitude.
 };
 
 typedef void (*mode_s_callback_t)(mode_s_t *self, struct mode_s_msg *mm);

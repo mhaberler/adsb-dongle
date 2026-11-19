@@ -11,7 +11,8 @@ export interface AircraftMessage {
   alt_geom?: number;
   gs?: number;
   track?: number;
-  baro_rate?: number;
+  baro_rate?: number; // ft/min, barometric source
+  geom_rate?: number; // ft/min, GNSS source (readsb's name)
   squawk?: string;
   emergency?: string;
   lat?: number;

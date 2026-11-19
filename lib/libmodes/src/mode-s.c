@@ -285,20 +285,80 @@ int decode_ac13_field(unsigned char *msg, int *unit) {
   return 0;
 }
 
-// Decode the 12 bit AC altitude field (in DF 17 and others). Returns the
-// altitude or 0 if it can't be decoded.
-int decode_ac12_field(unsigned char *msg, int *unit) {
-  int q_bit = msg[5] & 1;
+// 13-bit Gillham-ordered field (C1 A1 C2 A2 C4 A4 X B1 D1 B2 D2 B4 D4, MSB
+// first) -> "hex Gillham" 0xABCD, one octal digit per nibble, as readsb's
+// decodeID13Field(). For a squawk this is the code in hex: 7700 -> 0x7700.
+// (patch: sensorpod)
+static unsigned decode_id13_field(unsigned id13) {
+  unsigned hex = 0;
+  if (id13 & 0x1000) hex |= 0x0010; // C1
+  if (id13 & 0x0800) hex |= 0x1000; // A1
+  if (id13 & 0x0400) hex |= 0x0020; // C2
+  if (id13 & 0x0200) hex |= 0x2000; // A2
+  if (id13 & 0x0100) hex |= 0x0040; // C4
+  if (id13 & 0x0080) hex |= 0x4000; // A4
+  // 0x0040: X (or M), unused
+  if (id13 & 0x0020) hex |= 0x0100; // B1
+  if (id13 & 0x0010) hex |= 0x0001; // D1 (or Q)
+  if (id13 & 0x0008) hex |= 0x0200; // B2
+  if (id13 & 0x0004) hex |= 0x0002; // D2
+  if (id13 & 0x0002) hex |= 0x0400; // B4
+  if (id13 & 0x0001) hex |= 0x0004; // D4
+  return hex;
+}
 
-  if (q_bit) {
+// Gillham (Mode C) altitude code in hex-Gillham form -> altitude in 100 ft
+// units, or MODE_S_INVALID_ALTITUDE. Same algorithm as readsb's
+// internalModeAToModeC() (mode_ac.c). (patch: sensorpod)
+static int mode_a_to_mode_c(unsigned mode_a) {
+  unsigned one_hundreds = 0, five_hundreds = 0;
+
+  // D1 and the unused bits must be clear, C1/C2/C4 can't all be zero.
+  if ((mode_a & 0xFFFF8889) != 0 || (mode_a & 0x00F0) == 0)
+    return MODE_S_INVALID_ALTITUDE;
+
+  if (mode_a & 0x0010) one_hundreds ^= 0x007; // C1
+  if (mode_a & 0x0020) one_hundreds ^= 0x003; // C2
+  if (mode_a & 0x0040) one_hundreds ^= 0x001; // C4
+  if ((one_hundreds & 5) == 5) one_hundreds ^= 2; // 7 -> 5, 5 -> 7
+  if (one_hundreds > 5)
+    return MODE_S_INVALID_ALTITUDE;
+
+  if (mode_a & 0x0002) five_hundreds ^= 0x0FF; // D2
+  if (mode_a & 0x0004) five_hundreds ^= 0x07F; // D4
+  if (mode_a & 0x1000) five_hundreds ^= 0x03F; // A1
+  if (mode_a & 0x2000) five_hundreds ^= 0x01F; // A2
+  if (mode_a & 0x4000) five_hundreds ^= 0x00F; // A4
+  if (mode_a & 0x0100) five_hundreds ^= 0x007; // B1
+  if (mode_a & 0x0200) five_hundreds ^= 0x003; // B2
+  if (mode_a & 0x0400) five_hundreds ^= 0x001; // B4
+
+  // The 100 ft code runs backwards in odd 500 ft steps.
+  if (five_hundreds & 1)
+    one_hundreds = 6 - one_hundreds;
+
+  return (int)(five_hundreds * 5 + one_hundreds) - 13;
+}
+
+// Decode the 12 bit AC altitude field (in DF 17 and others). Returns the
+// altitude in feet or MODE_S_INVALID_ALTITUDE. Q bit set: 25 ft steps; Q bit
+// clear: 100 ft Gillham code from older (mostly GA) altitude encoders - the
+// original returned 0 for those (patch: sensorpod).
+int decode_ac12_field(unsigned char *msg, int *unit) {
+  unsigned ac12 = ((unsigned)msg[5] << 4) | (msg[6] >> 4);
+  *unit = MODE_S_UNIT_FEET;
+
+  if (ac12 & 0x10) {
     // N is the 11 bit integer resulting from the removal of bit Q
-    *unit = MODE_S_UNIT_FEET;
-    int n = ((msg[5] >> 1) << 4) | ((msg[6] & 0xF0) >> 4);
+    int n = ((ac12 & 0x0FE0) >> 1) | (ac12 & 0x000F);
     // The final altitude is due to the resulting number multiplied by 25,
     // minus 1000.
     return n * 25 - 1000;
   } else {
-    return 0;
+    // Insert M = 0 at bit 6 to get the 13-bit Gillham layout.
+    unsigned id13 = ((ac12 & 0x0FC0) << 1) | (ac12 & 0x003F);
+    int c = mode_a_to_mode_c(decode_id13_field(id13));
+    return c == MODE_S_INVALID_ALTITUDE ? c : c * 100;
   }
 }
 
@@ -461,50 +521,67 @@ void mode_s_decode(mode_s_t *self, struct mode_s_msg *mm, unsigned char *msg) {
       mm->fflag = msg[6] & (1 << 2);
       mm->tflag = msg[6] & (1 << 3);
       mm->altitude = decode_ac12_field(msg, &mm->unit);
+      mm->altitude_valid = mm->altitude != MODE_S_INVALID_ALTITUDE;
       mm->raw_latitude = ((msg[6] & 3) << 15) | (msg[7] << 7) | (msg[8] >> 1);
       mm->raw_longitude = ((msg[8] & 1) << 16) | (msg[9] << 8) | msg[10];
       // NIC supplement-B (version 2) / single-antenna flag (patch: sensorpod)
       mm->nic_b = me_getbit(msg, 8);
     } else if (mm->metype == 19 && mm->mesub >= 1 && mm->mesub <= 4) {
-      // Airborne Velocity Message
+      // Airborne Velocity Message. Raw values are offset by one (0 = no
+      // information), as in readsb's decodeESAirborneVelocity() - the
+      // original used them unscaled and without the offset (patch:
+      // sensorpod).
       if (mm->mesub == 1 || mm->mesub == 2) {
-        mm->ew_dir = (msg[5] & 4) >> 2;
-        mm->ew_velocity = ((msg[5] & 3) << 8) | msg[6];
-        mm->ns_dir = (msg[7] & 0x80) >> 7;
-        mm->ns_velocity = ((msg[7] & 0x7f) << 3) | ((msg[8] & 0xe0) >> 5);
-        mm->vert_rate_source = (msg[8] & 0x10) >> 4;
-        mm->vert_rate_sign = (msg[8] & 0x8) >> 3;
-        mm->vert_rate = ((msg[8] & 7) << 6) | ((msg[9] & 0xfc) >> 2);
-        // Geometric - barometric altitude difference, 25 ft units, bit 49
-        // is sign (patch: sensorpod).
-        mm->geo_minus_baro_valid = 1;
-        mm->geo_minus_baro_sign = (msg[10] & 0x80) >> 7;
-        mm->geo_minus_baro = (msg[10] & 0x7f) * 25;
-        // Compute velocity and angle from the two speed components
-        mm->velocity = sqrt(mm->ns_velocity * mm->ns_velocity +
-                            mm->ew_velocity * mm->ew_velocity);
-        if (mm->velocity) {
-          int ewv = mm->ew_velocity;
-          int nsv = mm->ns_velocity;
+        unsigned ew_raw = me_getbits(msg, 15, 24);
+        unsigned ns_raw = me_getbits(msg, 26, 35);
+        mm->ew_dir = me_getbit(msg, 14);
+        mm->ns_dir = me_getbit(msg, 25);
+        if (ew_raw && ns_raw) {
+          int scale = mm->mesub == 2 ? 4 : 1; // supersonic: 4 kt units
+          int ewv, nsv;
           double heading;
 
-          if (mm->ew_dir)
-            ewv *= -1;
-          if (mm->ns_dir)
-            nsv *= -1;
-          heading = atan2(ewv, nsv);
-
-          // Convert to degrees.
-          mm->heading = heading * 360 / (M_PI * 2);
-          // We don't want negative values but a 0-360 scale.
-          if (mm->heading < 0)
-            mm->heading += 360;
-        } else {
-          mm->heading = 0;
+          mm->ew_velocity = (int)(ew_raw - 1) * scale;
+          mm->ns_velocity = (int)(ns_raw - 1) * scale;
+          ewv = mm->ew_dir ? -mm->ew_velocity : mm->ew_velocity;
+          nsv = mm->ns_dir ? -mm->ns_velocity : mm->ns_velocity;
+          // Compute velocity and angle from the two speed components
+          mm->velocity_valid = 1;
+          mm->velocity = (int)(sqrt((double)ewv * ewv + (double)nsv * nsv) + 0.5);
+          heading = atan2(ewv, nsv) * 180 / M_PI;
+          if (heading < 0)
+            heading += 360;
+          mm->heading = (int)(heading + 0.5) % 360;
         }
       } else if (mm->mesub == 3 || mm->mesub == 4) {
         mm->heading_is_valid = msg[5] & (1 << 2);
         mm->heading = (360.0 / 128) * (((msg[5] & 3) << 5) | (msg[6] >> 3));
+      }
+
+      // Vertical rate, 64 ft/min units, same position in all subtypes.
+      {
+        unsigned vr_raw = me_getbits(msg, 38, 46);
+        mm->vert_rate_source = me_getbit(msg, 36); // 1 = baro, 0 = GNSS
+        mm->vert_rate_sign = me_getbit(msg, 37);
+        if (vr_raw) {
+          mm->vert_rate_valid = 1;
+          mm->vert_rate = (int)(vr_raw - 1) * 64;
+          if (mm->vert_rate_sign)
+            mm->vert_rate = -mm->vert_rate;
+        }
+      }
+
+      // Geometric - barometric altitude difference, 25 ft units, bit 49 is
+      // the sign (patch: sensorpod).
+      {
+        unsigned delta_raw = me_getbits(msg, 50, 56);
+        mm->geo_minus_baro_sign = me_getbit(msg, 49);
+        if (delta_raw) {
+          mm->geo_minus_baro_valid = 1;
+          mm->geo_minus_baro = (int)(delta_raw - 1) * 25;
+          if (mm->geo_minus_baro_sign)
+            mm->geo_minus_baro = -mm->geo_minus_baro;
+        }
       }
     } else if (mm->metype == 31 && mm->mesub == 0) {
       // Operational Status, airborne (mesub 0). Bit numbers are
@@ -541,26 +618,13 @@ void mode_s_decode(mode_s_t *self, struct mode_s_msg *mm, unsigned char *msg) {
       mm->es_emergency_valid = 1;
       mm->es_emergency = me_getbits(msg, 9, 11);
 
-      // ID13 field, 13 bits, MSB (bit 12) first. Bit-to-Gillham-group
-      // mapping transcribed from readsb's decodeID13Field() (patch:
-      // sensorpod): bit12=C1 bit11=A1 bit10=C2 bit9=A2 bit8=C4 bit7=A4
-      // bit6=X(unused) bit5=B1 bit4=D1 bit3=B2 bit2=D2 bit1=B4 bit0=D4.
+      // ID13 field, 13 bits, MSB (bit 12) first, decoded like readsb's
+      // decodeID13Field(): stored hex-coded (squawk 7700 -> 0x7700) so the
+      // caller's "%04x" prints the code (patch: sensorpod).
       unsigned id13 = me_getbits(msg, 12, 24);
       if (id13) {
-        int a = ((id13 >> 7) & 1) << 2 |  // A4
-                ((id13 >> 9) & 1) << 1 |  // A2
-                ((id13 >> 11) & 1);       // A1
-        int b = ((id13 >> 1) & 1) << 2 |  // B4
-                ((id13 >> 3) & 1) << 1 |  // B2
-                ((id13 >> 5) & 1);        // B1
-        int c = ((id13 >> 8) & 1) << 2 |  // C4
-                ((id13 >> 10) & 1) << 1 | // C2
-                ((id13 >> 12) & 1);       // C1
-        int d = (id13 & 1) << 2 |         // D4
-                ((id13 >> 2) & 1) << 1 |  // D2
-                ((id13 >> 4) & 1);        // D1
         mm->es_squawk_valid = 1;
-        mm->es_squawk = a * 1000 + b * 100 + c * 10 + d;
+        mm->es_squawk = (int)decode_id13_field(id13);
       }
     }
   }

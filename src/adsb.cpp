@@ -58,7 +58,9 @@ struct Aircraft {
   int track = -1;
   int baro_rate = 0;
   bool has_baro_rate = false;
-  int squawk = -1;
+  int geom_rate = 0; // vertical rate from GNSS, ft/min
+  bool has_geom_rate = false;
+  int squawk = -1; // hex-coded, 0x7700 = squawk 7700
   double lat = 0, lon = 0;
   bool has_pos = false;
   uint32_t seen_pos_ms = 0;
@@ -235,8 +237,10 @@ static void adsb_process_frame(const char *hex, size_t hexlen) {
     ac->has_flight = true;
   } else if (mm.metype >= 9 && mm.metype <= 18) {
     // Airborne position: CPR pairing + global decode.
-    ac->alt_baro = mm.altitude;
-    ac->has_alt_baro = true;
+    if (mm.altitude_valid) {
+      ac->alt_baro = mm.altitude;
+      ac->has_alt_baro = true;
+    }
 
     if (mm.fflag) {
       ac->odd_lat = mm.raw_latitude;
@@ -265,18 +269,25 @@ static void adsb_process_frame(const char *hex, size_t hexlen) {
       }
     }
   } else if (mm.metype == 19 && mm.mesub >= 1 && mm.mesub <= 4) {
-    ac->baro_rate = mm.vert_rate_sign ? -mm.vert_rate : mm.vert_rate;
-    ac->has_baro_rate = true;
+    if (mm.vert_rate_valid) {
+      if (mm.vert_rate_source) {
+        ac->baro_rate = mm.vert_rate;
+        ac->has_baro_rate = true;
+      } else {
+        ac->geom_rate = mm.vert_rate;
+        ac->has_geom_rate = true;
+      }
+    }
     if (mm.mesub == 1 || mm.mesub == 2) {
-      ac->gs = mm.velocity;
-      ac->track = mm.heading;
+      if (mm.velocity_valid) {
+        ac->gs = mm.velocity;
+        ac->track = mm.heading;
+      }
     } else if (mm.heading_is_valid) {
       ac->track = mm.heading;
     }
     if (mm.geo_minus_baro_valid && ac->has_alt_baro) {
-      int delta =
-          mm.geo_minus_baro_sign ? -mm.geo_minus_baro : mm.geo_minus_baro;
-      ac->alt_geom = ac->alt_baro + delta;
+      ac->alt_geom = ac->alt_baro + mm.geo_minus_baro;
       ac->has_alt_geom = true;
     }
   } else if (mm.metype == 31 && mm.mesub == 0 && mm.opstatus_valid) {
@@ -330,6 +341,8 @@ static void adsb_publish_aircraft(Aircraft &ac, uint32_t now) {
     doc["track"] = ac.track;
   if (ac.has_baro_rate)
     doc["baro_rate"] = ac.baro_rate;
+  if (ac.has_geom_rate)
+    doc["geom_rate"] = ac.geom_rate;
   if (ac.squawk >= 0) {
     char squawk_hex[5];
     snprintf(squawk_hex, sizeof(squawk_hex), "%04x", (unsigned)ac.squawk);

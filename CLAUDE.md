@@ -59,7 +59,13 @@ aircraft table + publish), all in `src/adsb.cpp`.
   `lib/libmodes/include/mode-s.h`): DF18 aliased into the DF17 ME-decode
   path, geometric-altitude delta (ME19), Operational Status fields (ME31
   subtype 0), emergency/squawk (ME28 subtype 1), and NIC-B (ME bit 8 of
-  airborne positions). CRC is check-only — no bit-error correction.
+  airborne positions). Plus decode fixes: Q=0 altitudes (100 ft Gillham
+  code from older GA encoders — upstream returned 0, shown as FL000)
+  via readsb's `modeAToModeC` algorithm, undecodable altitude →
+  `altitude_valid = 0`; ME19 raw values offset by one (0 = no info) and
+  scaled (vertical rate ×64 ft/min, geo delta ×25 ft, supersonic ×4 kt),
+  each with a `*_valid` flag; ME28 squawk hex-coded (`0x7700`). CRC is
+  check-only — no bit-error correction.
 - **NIC** (`src/nic.h`, header-only, plain C): `adsb_compute_nic()` turns
   the position type code plus NIC-A (from ME31) and NIC-B into the
   position's integrity category, same mapping as readsb's
@@ -79,7 +85,8 @@ aircraft table + publish), all in `src/adsb.cpp`.
   at most once per second, only when new messages arrived since the last
   publish (on-change, not a fixed heartbeat) — mirrors readsb's
   `aircraft.json` field names (`hex`, `flight`, `category`, `alt_baro`,
-  `alt_geom`, `gs`, `track`, `baro_rate`, `squawk`, `emergency`, `lat`,
+  `alt_geom`, `gs`, `track`, `baro_rate`/`geom_rate` (by the vertical
+  rate's source bit), `squawk`, `emergency`, `lat`,
   `lon`, `seen_pos`, `nic`, `version`, `nic_baro`, `nac_p`, `sil`,
   `sil_type`, `gva`, `seen`, `messages`); fields are omitted, not
   zero-filled, until decoded at least once. `category` is readsb's
@@ -203,7 +210,8 @@ direct-wired module, not the dongle).
   code (`mode_s_detect`, magnitude vectors) is not ported since input
   frames arrive already framed, same as the firmware. Carries the same
   local patches as `lib/libmodes` (DF18 aliasing, ME19 geo−baro
-  delta, ME31 opstatus fields, ME28 emergency/squawk, NIC-B) — see comment block
+  delta, ME31 opstatus fields, ME28 emergency/squawk, NIC-B, and the
+  Gillham-altitude/ME19-scaling/squawk decode fixes) — see comment block
   at top of `lib/libmodes/include/mode-s.h` for patch details, which apply
   identically here. CRC is check-only, matching firmware config
   (`fix_errors=0`, `aggressive=0`).
@@ -247,7 +255,11 @@ direct-wired module, not the dongle).
   Expected values were cross-checked by compiling and running
   `lib/libmodes/src/mode-s.c` directly on the same frames (see git history
   for the one-off comparison script) — confirms bit-level parity with the
-  firmware decoder, not just internal self-consistency.
+  firmware decoder, not just internal self-consistency. Field-decoding
+  tests anchor on "The 1090 MHz Riddle" textbook frames (38000 ft;
+  159 kt / 182.88° / −832 ft/min / +550 ft) and round-trip every Q=0
+  altitude (−1200…126700 ft) through an independent Gillham encoder
+  written in the test.
 - **`map.ts`** (`AircraftMap`): one `Track` per ICAO address with a
   position — marker (rotation, fill colour and label are patched into its
   DOM element per update; the `L.divIcon` is only swapped when the shape
