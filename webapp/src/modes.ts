@@ -6,9 +6,11 @@
 // firmware. CRC is check-only: no single/two-bit error correction (matches
 // firmware config: fix_errors=0, aggressive=0, check_crc=1).
 //
-// Carries the same four local patches as the firmware (see comment at top
+// Carries the same local patches as the firmware (see comment at top
 // of lib/libmodes/include/mode-s.h): DF18 aliasing, ME19 geo-baro delta,
-// ME31 operational status fields, ME28 emergency/squawk.
+// ME31 operational status fields, ME28 emergency/squawk, NIC-B — plus the
+// decode fixes from the same comment: Gillham (Q=0) altitude, ME19
+// velocity/vertical-rate/geo-delta scaling, hex-coded squawk.
 
 const MODE_S_CHECKSUM_TABLE: number[] = [
   0x3935ea, 0x1c9af5, 0xf1b77e, 0x78dbbf, 0xc397db, 0x9e31e9, 0xb0e2f0,
@@ -68,11 +70,74 @@ function meGetBits(msg: Uint8Array, firstBit: number, lastBit: number): number {
   return value;
 }
 
-function decodeAc12Field(msg: Uint8Array): number {
-  const qBit = msg[5] & 1;
-  if (!qBit) return 0;
-  const n = ((msg[5] >> 1) << 4) | ((msg[6] & 0xf0) >> 4);
-  return n * 25 - 1000;
+// 13-bit Gillham-ordered field (C1 A1 C2 A2 C4 A4 X B1 D1 B2 D2 B4 D4,
+// MSB first) -> "hex Gillham" 0xABCD, one octal digit per nibble (bit 0 =
+// x1, bit 1 = x2, bit 2 = x4), as readsb's decodeID13Field(). For a squawk
+// this is the code itself in hex: 7700 -> 0x7700.
+export function decodeId13Field(id13: number): number {
+  let hex = 0;
+  if (id13 & 0x1000) hex |= 0x0010; // C1
+  if (id13 & 0x0800) hex |= 0x1000; // A1
+  if (id13 & 0x0400) hex |= 0x0020; // C2
+  if (id13 & 0x0200) hex |= 0x2000; // A2
+  if (id13 & 0x0100) hex |= 0x0040; // C4
+  if (id13 & 0x0080) hex |= 0x4000; // A4
+  // 0x0040: X (or M), unused
+  if (id13 & 0x0020) hex |= 0x0100; // B1
+  if (id13 & 0x0010) hex |= 0x0001; // D1 (or Q)
+  if (id13 & 0x0008) hex |= 0x0200; // B2
+  if (id13 & 0x0004) hex |= 0x0002; // D2
+  if (id13 & 0x0002) hex |= 0x0400; // B4
+  if (id13 & 0x0001) hex |= 0x0004; // D4
+  return hex;
+}
+
+// Gillham (Mode C) altitude code in hex-Gillham form -> altitude in 100 ft
+// units, or undefined if the code is not a valid altitude. Same algorithm
+// as readsb's internalModeAToModeC() (mode_ac.c): the 500 ft steps are a
+// Gray code over D2 D4 A1 A2 A4 B1 B2 B4, the 100 ft steps a 5-state
+// reflected code over C1 C2 C4.
+export function modeAToModeC(modeA: number): number | undefined {
+  // D1 and the unused bits must be clear, C1/C2/C4 can't all be zero.
+  if ((modeA & 0xffff8889) !== 0 || (modeA & 0x00f0) === 0) return undefined;
+
+  let oneHundreds = 0;
+  if (modeA & 0x0010) oneHundreds ^= 0x007; // C1
+  if (modeA & 0x0020) oneHundreds ^= 0x003; // C2
+  if (modeA & 0x0040) oneHundreds ^= 0x001; // C4
+  if ((oneHundreds & 5) === 5) oneHundreds ^= 2; // 7 -> 5, 5 -> 7
+  if (oneHundreds > 5) return undefined;
+
+  let fiveHundreds = 0;
+  if (modeA & 0x0002) fiveHundreds ^= 0x0ff; // D2
+  if (modeA & 0x0004) fiveHundreds ^= 0x07f; // D4
+  if (modeA & 0x1000) fiveHundreds ^= 0x03f; // A1
+  if (modeA & 0x2000) fiveHundreds ^= 0x01f; // A2
+  if (modeA & 0x4000) fiveHundreds ^= 0x00f; // A4
+  if (modeA & 0x0100) fiveHundreds ^= 0x007; // B1
+  if (modeA & 0x0200) fiveHundreds ^= 0x003; // B2
+  if (modeA & 0x0400) fiveHundreds ^= 0x001; // B4
+
+  // The 100 ft code runs backwards in odd 500 ft steps.
+  if (fiveHundreds & 1) oneHundreds = 6 - oneHundreds;
+
+  return fiveHundreds * 5 + oneHundreds - 13;
+}
+
+// 12-bit AC altitude field (ME bits 9-20) -> feet, undefined if not
+// available. Q bit set: 25 ft steps. Q bit clear: 100 ft Gillham code, as
+// sent by older (mostly GA) altitude encoders (patch: firmware; libmodes
+// returned 0 here).
+function decodeAc12Field(msg: Uint8Array): number | undefined {
+  const ac12 = meGetBits(msg, 9, 20);
+  if (ac12 & 0x10) {
+    const n = ((ac12 & 0x0fe0) >> 1) | (ac12 & 0x000f);
+    return n * 25 - 1000;
+  }
+  // Insert M = 0 at bit 6 to get the 13-bit Gillham layout.
+  const id13 = ((ac12 & 0x0fc0) << 1) | (ac12 & 0x003f);
+  const c = modeAToModeC(decodeId13Field(id13));
+  return c === undefined ? undefined : c * 100;
 }
 
 export interface ModeSMessage {
@@ -92,20 +157,19 @@ export interface ModeSMessage {
 
   // ME9-18: airborne position
   fflag?: boolean;
-  altitude?: number;
+  altitude?: number; // feet; undefined if the AC field carries none
   rawLatitude?: number;
   rawLongitude?: number;
   nicB?: number; // ME bit 8: NIC supplement-B (v2), single-antenna flag (v0/1)
 
-  // ME19 sub 1-4: velocity
-  velocity?: number;
-  heading?: number;
-  headingIsValid?: boolean;
-  vertRateSign?: number;
-  vertRate?: number;
-  geoMinusBaroValid?: boolean;
-  geoMinusBaroSign?: number;
-  geoMinusBaro?: number;
+  // ME19 sub 1-4: velocity. Each field is undefined when the message says
+  // "no information" (raw value 0).
+  velocity?: number; // ground speed, knots (sub 1/2)
+  heading?: number; // track over ground (sub 1/2) or heading (sub 3/4), degrees
+  headingIsValid?: boolean; // sub 3/4 only
+  vertRate?: number; // ft/min, signed (positive = climbing)
+  vertRateBaro?: boolean; // vertRate source: true = barometric, false = GNSS
+  geoMinusBaro?: number; // geometric - barometric altitude, feet, signed
 
   // ME31 sub 0: operational status (version 1/2 only)
   opstatusValid?: boolean;
@@ -182,32 +246,38 @@ export function decodeModeS(msg: Uint8Array): ModeSMessage | null {
     mm.rawLongitude = ((msg[8] & 1) << 16) | (msg[9] << 8) | msg[10];
     mm.nicB = meGetBit(msg, 8); // (patch: firmware)
   } else if (metype === 19 && mesub >= 1 && mesub <= 4) {
+    // Raw values are offset by one (0 = no information), as in readsb's
+    // decodeESAirborneVelocity() (patch: firmware; libmodes used them
+    // unscaled and without the offset).
     if (mesub === 1 || mesub === 2) {
-      const ewDir = (msg[5] & 4) >> 2;
-      const ewVelocity = ((msg[5] & 3) << 8) | msg[6];
-      const nsDir = (msg[7] & 0x80) >> 7;
-      const nsVelocity = ((msg[7] & 0x7f) << 3) | ((msg[8] & 0xe0) >> 5);
-      mm.vertRateSign = (msg[8] & 0x8) >> 3;
-      mm.vertRate = ((msg[8] & 7) << 6) | ((msg[9] & 0xfc) >> 2);
-      // Geometric - barometric altitude difference, 25 ft units, bit 49 is
-      // sign (patch: firmware).
-      mm.geoMinusBaroValid = true;
-      mm.geoMinusBaroSign = (msg[10] & 0x80) >> 7;
-      mm.geoMinusBaro = (msg[10] & 0x7f) * 25;
-
-      mm.velocity = Math.sqrt(nsVelocity * nsVelocity + ewVelocity * ewVelocity);
-      if (mm.velocity) {
-        const ewv = ewDir ? -ewVelocity : ewVelocity;
-        const nsv = nsDir ? -nsVelocity : nsVelocity;
-        let heading = (Math.atan2(ewv, nsv) * 360) / (2 * Math.PI);
+      const ewRaw = meGetBits(msg, 15, 24);
+      const nsRaw = meGetBits(msg, 26, 35);
+      if (ewRaw && nsRaw) {
+        const scale = mesub === 2 ? 4 : 1; // subtype 2: supersonic, 4 kt units
+        const ewv = (ewRaw - 1) * scale * (meGetBit(msg, 14) ? -1 : 1);
+        const nsv = (nsRaw - 1) * scale * (meGetBit(msg, 25) ? -1 : 1);
+        mm.velocity = Math.sqrt(ewv * ewv + nsv * nsv);
+        let heading = (Math.atan2(ewv, nsv) * 180) / Math.PI;
         if (heading < 0) heading += 360;
         mm.heading = heading;
-      } else {
-        mm.heading = 0;
       }
     } else {
       mm.headingIsValid = (msg[5] & (1 << 2)) !== 0;
       mm.heading = (360.0 / 128) * (((msg[5] & 3) << 5) | (msg[6] >> 3));
+    }
+
+    // Vertical rate, 64 ft/min units; same position in all four subtypes.
+    const vrRaw = meGetBits(msg, 38, 46);
+    if (vrRaw) {
+      mm.vertRate = (meGetBit(msg, 37) ? -64 : 64) * (vrRaw - 1) || 0; // || 0: no "-0"
+      mm.vertRateBaro = meGetBit(msg, 36) === 1;
+    }
+
+    // Geometric - barometric altitude difference, 25 ft units, bit 49 is
+    // the sign (patch: firmware).
+    const deltaRaw = meGetBits(msg, 50, 56);
+    if (deltaRaw) {
+      mm.geoMinusBaro = (meGetBit(msg, 49) ? -25 : 25) * (deltaRaw - 1) || 0;
     }
   } else if (metype === 31 && mesub === 0) {
     // Operational Status, airborne (mesub 0). Only versions 1/2 carry
@@ -233,16 +303,12 @@ export function decodeModeS(msg: Uint8Array): ModeSMessage | null {
     mm.esEmergencyValid = true;
     mm.esEmergency = meGetBits(msg, 9, 11);
 
-    // ID13 field, 13 bits, MSB (bit 12) first. Gillham-group mapping
-    // transcribed from readsb's decodeID13Field().
+    // ID13 field, 13 bits, MSB (bit 12) first. Stored hex-coded like
+    // readsb (squawk 7700 -> 0x7700), so "%04x" prints the code.
     const id13 = meGetBits(msg, 12, 24);
     if (id13) {
-      const a = (((id13 >> 7) & 1) << 2) | (((id13 >> 9) & 1) << 1) | ((id13 >> 11) & 1);
-      const b = (((id13 >> 1) & 1) << 2) | (((id13 >> 3) & 1) << 1) | ((id13 >> 5) & 1);
-      const c = (((id13 >> 8) & 1) << 2) | (((id13 >> 10) & 1) << 1) | ((id13 >> 12) & 1);
-      const d = ((id13 & 1) << 2) | (((id13 >> 2) & 1) << 1) | ((id13 >> 4) & 1);
       mm.esSquawkValid = true;
-      mm.esSquawk = a * 1000 + b * 100 + c * 10 + d;
+      mm.esSquawk = decodeId13Field(id13);
     }
   }
 

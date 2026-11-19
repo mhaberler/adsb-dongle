@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- Full-bleed background so the icon survives Android's maskable crop;
+       the arrow (favicon.svg) sits inside the central safe zone. -->
+  <rect width="24" height="24" fill="#1d3557"/>
+  <g transform="translate(12 12) scale(0.8) translate(-12 -7.5)">
+    <path d="M12 1 L17 14 L12 11 L7 14 Z" fill="#e63946" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"/>
+  </g>
+</svg>

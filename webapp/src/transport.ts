@@ -15,6 +15,12 @@ export interface ByteTransport {
 }
 
 const PROBE_WINDOW_MS = 2000;
+// Bytes arriving this soon after open() are discarded by the probe: USB-
+// UART chips (FTDI) keep receiving at the previous baud rate while the
+// port is closed and hand their buffer (up to ~512 bytes, i.e. a dozen
+// perfectly valid frames) over on the next open - which would make a
+// wrong rate look right. The buffer comes in the first read(s).
+export const PROBE_SETTLE_MS = 300;
 
 export class LineReader {
   private transport: ByteTransport | null = null;
@@ -23,10 +29,10 @@ export class LineReader {
   private lineBuffer = "";
 
   // Probes baud rates in `probeOrder`: opens at each rate and watches for
-  // a line matching `isValidLine` within PROBE_WINDOW_MS. Keeps the first
-  // rate that produces a recognizable line; falls back to the first rate
-  // in the list if none do (so a silent/idle device still ends up
-  // connected).
+  // a line matching `isValidLine` within PROBE_WINDOW_MS (ignoring what
+  // arrives in the first PROBE_SETTLE_MS). Keeps the first rate that
+  // produces a recognizable line; falls back to the last rate in the list
+  // if none do (so a silent/idle device still ends up connected).
   async connect(
     transport: ByteTransport,
     probeOrder: number[],
@@ -106,6 +112,7 @@ export class LineReader {
     const decoder = new TextDecoder();
     let buffer = "";
     let matched = false;
+    const settleUntil = Date.now() + PROBE_SETTLE_MS;
     const deadline = Date.now() + PROBE_WINDOW_MS;
 
     while (Date.now() < deadline) {
@@ -116,6 +123,7 @@ export class LineReader {
       ]);
       if (chunk === undefined) break; // timed out this iteration
       if (chunk === null) break; // EOF
+      if (Date.now() < settleUntil) continue; // stale buffer from before open
 
       buffer += decoder.decode(chunk, { stream: true });
       const lines = buffer.split("\n");

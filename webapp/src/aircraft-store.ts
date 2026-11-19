@@ -30,7 +30,8 @@ interface AircraftState {
   gs?: number;
   track?: number;
   baroRate?: number;
-  squawk?: number;
+  geomRate?: number;
+  squawk?: number; // hex-coded, 0x7700 = squawk 7700
   emergency?: number;
   lat?: number;
   lon?: number;
@@ -195,7 +196,7 @@ export class AircraftStore {
       // 4-1 in the high nibble, ME bits 6-8 (mesub) in the low one.
       ac.category = ((0x0e - mm.metype) << 4) | mm.mesub;
     } else if (mm.metype >= 9 && mm.metype <= 18) {
-      ac.altBaro = mm.altitude;
+      if (mm.altitude !== undefined) ac.altBaro = mm.altitude;
 
       if (mm.fflag) {
         ac.oddLat = mm.rawLatitude!;
@@ -219,16 +220,20 @@ export class AircraftStore {
         }
       }
     } else if (mm.metype === 19 && mm.mesub! >= 1 && mm.mesub! <= 4) {
-      ac.baroRate = mm.vertRateSign ? -mm.vertRate! : mm.vertRate;
-      if (mm.mesub === 1 || mm.mesub === 2) {
-        ac.gs = Math.round(mm.velocity!);
-        ac.track = Math.round(mm.heading!);
-      } else if (mm.headingIsValid) {
-        ac.track = Math.round(mm.heading!);
+      if (mm.vertRate !== undefined) {
+        if (mm.vertRateBaro) ac.baroRate = mm.vertRate;
+        else ac.geomRate = mm.vertRate;
       }
-      if (mm.geoMinusBaroValid && ac.altBaro !== undefined) {
-        const delta = mm.geoMinusBaroSign ? -mm.geoMinusBaro! : mm.geoMinusBaro!;
-        ac.altGeom = ac.altBaro + delta;
+      if (mm.mesub === 1 || mm.mesub === 2) {
+        if (mm.velocity !== undefined) {
+          ac.gs = Math.round(mm.velocity);
+          ac.track = Math.round(mm.heading!) % 360;
+        }
+      } else if (mm.headingIsValid) {
+        ac.track = Math.round(mm.heading!) % 360;
+      }
+      if (mm.geoMinusBaro !== undefined && ac.altBaro !== undefined) {
+        ac.altGeom = ac.altBaro + mm.geoMinusBaro;
       }
     } else if (mm.metype === 31 && mm.mesub === 0 && mm.opstatusValid) {
       ac.navVersion = mm.opstatusVersion;
@@ -259,6 +264,7 @@ export class AircraftStore {
     if (ac.gs !== undefined) msg.gs = ac.gs;
     if (ac.track !== undefined) msg.track = ac.track;
     if (ac.baroRate !== undefined) msg.baro_rate = ac.baroRate;
+    if (ac.geomRate !== undefined) msg.geom_rate = ac.geomRate;
     if (ac.squawk !== undefined) msg.squawk = ac.squawk.toString(16).padStart(4, "0");
     if (ac.emergency !== undefined) {
       msg.emergency = EMERGENCY_NAMES[ac.emergency < 8 ? ac.emergency : 7];

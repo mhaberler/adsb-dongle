@@ -1,56 +1,97 @@
 import "./style.css";
 import { LineReader, type ByteTransport } from "./transport";
-import { requestWebSerialTransport } from "./transport-webserial";
+import { grantedWebSerialTransport, requestWebSerialTransport } from "./transport-webserial";
 import { FtdiTransport } from "./transport-ftdi";
 import { CdcAcmTransport } from "./transport-cdcacm";
-import { classifyLine, parseLine, parseRawFrame, parseRawSignal } from "./protocol";
+import { classifyLine, isPlausibleLine, parseLine, parseRawFrame, parseRawSignal } from "./protocol";
 import type { StatsMessage } from "./protocol";
 import { AircraftMap } from "./map";
 import { AircraftStore } from "./aircraft-store";
 import { MqttFeed, RAW_FRAME_TOPIC, isMixedContent } from "./mqtt-feed";
+import { advancedSection } from "./advanced";
 
 const connectBtn = document.querySelector<HTMLButtonElement>("#connect-btn")!;
-const connStatus = document.querySelector<HTMLSpanElement>("#conn-status")!;
+const statusMsg = document.querySelector<HTMLDivElement>("#status-msg")!;
 const statsEl = document.querySelector<HTMLDivElement>("#stats")!;
-const geoStatus = document.querySelector<HTMLSpanElement>("#geo-status")!;
-const mqttBtn = document.querySelector<HTMLButtonElement>("#mqtt-btn")!;
-const mqttUrl = document.querySelector<HTMLInputElement>("#mqtt-url")!;
 
-const MQTT_URL_KEY = "adsb.mqttUrl";
-mqttUrl.value = localStorage.getItem(MQTT_URL_KEY) ?? "ws://esp32p4-e185df.local:8080/mqtt";
+let toastTimer: number | undefined;
+
+// Transient message over the map. Empty text hides it immediately.
+function toast(msg: string, ms = 4000): void {
+  window.clearTimeout(toastTimer);
+  if (!msg) {
+    statusMsg.classList.remove("show");
+    return;
+  }
+  statusMsg.textContent = msg;
+  statusMsg.classList.add("show");
+  toastTimer = window.setTimeout(() => statusMsg.classList.remove("show"), ms);
+}
 
 const map = new AircraftMap("map");
 const lineReader = new LineReader();
 const mqttFeed = new MqttFeed();
 
+// MQTT broker feed (sensorpod): an expert option, so it lives collapsed in
+// the layer switcher's "Advanced" section instead of the toolbar.
+const MQTT_URL_KEY = "adsb.mqttUrl";
+const mqttBox = advancedSection(map);
+mqttBox.innerHTML =
+  `<div>MQTT broker feed</div>` +
+  `<div class="adv-hint">Raw frames from a sensorpod broker (topic ${RAW_FRAME_TOPIC}) ` +
+  `instead of a USB receiver.</div>` +
+  `<div class="adv-row"><input type="url" spellcheck="false" aria-label="MQTT broker WebSocket URL" /></div>` +
+  `<div class="adv-row"><button type="button">Connect</button></div>`;
+const mqttUrl = mqttBox.querySelector("input")!;
+const mqttBtn = mqttBox.querySelector("button")!;
+mqttUrl.placeholder = "ws://host:8080/mqtt";
+mqttUrl.value = "ws://esp32p4-e185df.local:8080/mqtt";
+try {
+  mqttUrl.value = localStorage.getItem(MQTT_URL_KEY) ?? mqttUrl.value;
+} catch {
+  // storage unavailable: keep the default
+}
+
 // Exactly one input source at a time: a serial link or a broker feed.
 type Source = "none" | "serial" | "mqtt";
 let source: Source = "none";
 
-// Web Serial (navigator.serial) is desktop-only - Android Chrome has no
-// such API at all, so there we fall back to WebUSB with hand-rolled
-// FTDI and CDC-ACM drivers (transport-ftdi.ts, transport-cdcacm.ts).
 // Baud probe order favors the direct-wired module's 921600 on the WebUSB
 // path (Android + WebUSB almost always means the FTDI-adapted module, not
 // the ESP32 dongle) and the dongle's 115200 first on Web Serial (desktop).
-async function requestTransport(): Promise<{ transport: ByteTransport; probeOrder: number[] }> {
+const SERIAL_PROBE = [115200, 921600];
+const USB_PROBE = [921600, 115200];
+
+const USB_FILTERS: USBDeviceFilter[] = [
+  { vendorId: 0x0403 }, // FTDI
+  { classCode: 0x02 }, // CDC comm interface
+  { classCode: 0xef }, // composite/IAD (covers most CDC-ACM boards)
+];
+
+function usbTransport(device: USBDevice): ByteTransport {
+  return FtdiTransport.matches(device) ? new FtdiTransport(device) : new CdcAcmTransport(device);
+}
+
+type Pick = { transport: ByteTransport; probeOrder: number[] };
+
+// Web Serial (navigator.serial) is desktop-only - Android Chrome has no
+// such API at all, so there we fall back to WebUSB with hand-rolled
+// FTDI and CDC-ACM drivers (transport-ftdi.ts, transport-cdcacm.ts).
+// `ask` = show the browser's device picker (needs a user click); without
+// it only devices granted on an earlier visit are used (auto-connect).
+async function findTransport(ask: boolean): Promise<Pick | null> {
   if (navigator.serial) {
-    return { transport: await requestWebSerialTransport(), probeOrder: [115200, 921600] };
+    const transport = ask ? await requestWebSerialTransport() : await grantedWebSerialTransport();
+    return transport && { transport, probeOrder: SERIAL_PROBE };
   }
   if (navigator.usb) {
-    const device = await navigator.usb.requestDevice({
-      filters: [
-        { vendorId: 0x0403 }, // FTDI
-        { classCode: 0x02 }, // CDC comm interface
-        { classCode: 0xef }, // composite/IAD (covers most CDC-ACM boards)
-      ],
-    });
-    const transport: ByteTransport = FtdiTransport.matches(device)
-      ? new FtdiTransport(device)
-      : new CdcAcmTransport(device);
-    return { transport, probeOrder: [921600, 115200] };
+    const device = ask
+      ? await navigator.usb.requestDevice({ filters: USB_FILTERS })
+      : (await navigator.usb.getDevices())[0];
+    return device ? { transport: usbTransport(device), probeOrder: USB_PROBE } : null;
   }
-  throw new Error("No Web Serial or WebUSB support in this browser");
+  if (ask) throw new Error("No Web Serial or WebUSB in this browser - use Chrome or Edge");
+  return null;
 }
 
 if ("geolocation" in navigator) {
@@ -59,7 +100,6 @@ if ("geolocation" in navigator) {
     (pos) => {
       geoFailStreak = 0;
       map.setMyLocation(pos.coords.latitude, pos.coords.longitude);
-      geoStatus.textContent = "";
     },
     (err) => {
       // PERMISSION_DENIED(1) / POSITION_UNAVAILABLE(2) / TIMEOUT(3).
@@ -67,14 +107,12 @@ if ("geolocation" in navigator) {
       // A first-fix TIMEOUT/POSITION_UNAVAILABLE is common while the OS
       // location backend warms up, so don't alarm on a single miss.
       geoFailStreak++;
-      if (err.code === GeolocationPositionError.PERMISSION_DENIED || geoFailStreak >= 3) {
-        geoStatus.textContent = `location: ${err.message}`;
+      if (err.code === GeolocationPositionError.PERMISSION_DENIED || geoFailStreak === 3) {
+        toast(`location: ${err.message}`);
       }
     },
     { enableHighAccuracy: false, maximumAge: 30000, timeout: 20000 },
   );
-} else {
-  geoStatus.textContent = "location: not supported";
 }
 
 type StreamMode = "unknown" | "ndjson" | "raw";
@@ -94,18 +132,36 @@ function renderStats(s: StatsMessage): void {
   ].join("\n");
 }
 
+type ConnState = "disconnected" | "connecting" | "connected" | "error";
+
+// The button is a bare colour swatch: its state is a data attribute, the
+// active source is `source` above.
+let connecting = false;
+
+function setState(state: ConnState): void {
+  connectBtn.dataset.state = state;
+  const label = state === "connected" ? "Disconnect" : "Connect";
+  connectBtn.title = label;
+  connectBtn.setAttribute("aria-label", label);
+}
+
+// The colour dot shows either source; a tap on it disconnects whichever
+// is active.
 function setSource(next: Source): void {
   source = next;
-  connStatus.textContent =
-    next === "serial" ? "connected" : next === "mqtt" ? `MQTT ${RAW_FRAME_TOPIC}` : "disconnected";
-  connectBtn.textContent = next === "serial" ? "Disconnect" : "Connect";
-  mqttBtn.textContent = next === "mqtt" ? "Disconnect MQTT" : "MQTT";
+  setState(next === "none" ? "disconnected" : "connected");
+  if (next === "mqtt") {
+    connectBtn.title = `MQTT ${RAW_FRAME_TOPIC} - tap to disconnect`;
+    connectBtn.setAttribute("aria-label", connectBtn.title);
+  }
+  mqttBtn.textContent = next === "mqtt" ? "Disconnect" : "Connect";
 }
 
 // Used only during baud auto-probe: a line is "valid" if it's a recognized
-// stream shape (NDJSON, raw frame, or a module command reply).
+// stream shape (NDJSON, raw frame, or a module command reply) - strictly,
+// so that line noise at a wrong baud rate can't lock that rate.
 function isRecognizedLine(line: string): boolean {
-  return classifyLine(line) !== "unknown";
+  return isPlausibleLine(line);
 }
 
 function handleNdjsonLine(line: string): void {
@@ -199,21 +255,42 @@ async function disconnectSource(): Promise<void> {
   if (source !== "none") onDisconnect();
 }
 
+// Serial link (Web Serial / WebUSB). Never replaces an active broker feed
+// on its own - only a click does.
+async function connect(ask: boolean): Promise<void> {
+  if (connecting || source !== "none") return;
+  connecting = true;
+  setState("connecting");
+  try {
+    resetState();
+    const pick = await findTransport(ask);
+    if (!pick) {
+      setState("disconnected");
+      return;
+    }
+    await lineReader.connect(pick.transport, pick.probeOrder, isRecognizedLine, handleLine, onDisconnect);
+    setSource("serial");
+  } catch (err) {
+    // Auto-connect attempts (startup, device plugged in) stay quiet; a
+    // Connect click always reports. Closing the picker without choosing
+    // a device (NotFoundError) is not an error either.
+    if (!ask || (err as DOMException).name === "NotFoundError") {
+      setState("disconnected");
+    } else {
+      setState("error");
+      toast((err as Error).message);
+    }
+  } finally {
+    connecting = false;
+  }
+}
+
 connectBtn.addEventListener("click", async () => {
-  if (source === "serial") {
+  if (source !== "none") {
     await disconnectSource();
     return;
   }
-
-  try {
-    const { transport, probeOrder } = await requestTransport();
-    await disconnectSource();
-    resetState();
-    await lineReader.connect(transport, probeOrder, isRecognizedLine, handleLine, onDisconnect);
-    setSource("serial");
-  } catch (err) {
-    connStatus.textContent = `error: ${(err as Error).message}`;
-  }
+  await connect(true);
 });
 
 mqttBtn.addEventListener("click", async () => {
@@ -221,23 +298,53 @@ mqttBtn.addEventListener("click", async () => {
     await disconnectSource();
     return;
   }
+  if (connecting) return;
 
   const url = mqttUrl.value.trim();
+  if (!url) return;
   if (isMixedContent(location.protocol, url)) {
-    connStatus.textContent = "error: ws:// is blocked on an https page - use wss:// or run the webapp over http (bun dev)";
+    toast("ws:// is blocked on an https page - use wss:// or run the webapp over http (bun dev)", 8000);
     return;
   }
-  localStorage.setItem(MQTT_URL_KEY, url);
+  try {
+    localStorage.setItem(MQTT_URL_KEY, url);
+  } catch {
+    // not remembered, still connect
+  }
+  connecting = true;
+  setState("connecting");
   try {
     await disconnectSource();
     resetState();
-    connStatus.textContent = "connecting...";
     await mqttFeed.connect(url, RAW_FRAME_TOPIC, handleLine, () => {
       onDisconnect();
-      connStatus.textContent = "error: broker lost";
+      setState("error");
+      toast("MQTT broker lost");
     });
     setSource("mqtt");
+    toast(`MQTT ${RAW_FRAME_TOPIC}`, 2500);
   } catch (err) {
-    connStatus.textContent = `error: ${(err as Error).message}`;
+    setState("error");
+    toast((err as Error).message);
+  } finally {
+    connecting = false;
   }
 });
+
+// Auto-connect, like the Android app: on startup and whenever a device is
+// plugged in - but only devices the user already picked once (browsers
+// never hand out unpicked devices without a click).
+navigator.serial?.addEventListener("connect", () => void connect(false));
+navigator.usb?.addEventListener("connect", () => void connect(false));
+void connect(false);
+
+// PWA: offline cache (sw.js is generated by the build, so not in dev).
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (hadController) toast("Update installed - reload to use it", 8000);
+  });
+  navigator.serviceWorker.register("./sw.js").catch((err: Error) => {
+    toast(`offline mode unavailable: ${err.message}`);
+  });
+}

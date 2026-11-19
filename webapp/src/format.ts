@@ -10,11 +10,11 @@ export const callsign = (ac: AircraftMessage) => ac.flight?.trim() || ac.hex.toU
 export const flightLevel = (ft: number) =>
   `FL${String(Math.max(0, Math.round(ft / 100))).padStart(3, "0")}`;
 
-// |baro_rate| below this (ft/min) counts as level flight
+// |vertical rate| below this (ft/min) counts as level flight
 const CLIMB_MIN_FPM = 128;
 
 export function climbArrow(ac: AircraftMessage): string {
-  const r = ac.baro_rate;
+  const r = ac.baro_rate ?? ac.geom_rate;
   if (r === undefined || Math.abs(r) < CLIMB_MIN_FPM) return "";
   return r > 0 ? "↑" : "↓";
 }

@@ -118,7 +118,8 @@ function popupHtml(
     ["FL", alt === undefined ? undefined : `${flightLevel(alt)} ${climbArrow(ac)}`],
     ["gs", ac.gs === undefined ? undefined : `${ac.gs} kt (${Math.round(ac.gs * KT_TO_KMH)} km/h)`],
     ["track", ac.track],
-    ["baro_rate", ac.baro_rate],
+    ["baro_rate", ac.baro_rate === undefined ? undefined : `${ac.baro_rate} ft/min`],
+    ["geom_rate", ac.geom_rate === undefined ? undefined : `${ac.geom_rate} ft/min`],
     ["squawk", ac.squawk],
     ["emergency", ac.emergency],
     ["GNSS", gnssText(ac)],
@@ -195,6 +196,7 @@ export class AircraftMap {
   private leadLayer = L.layerGroup();
   private ringLayer = L.layerGroup();
   private gnssStatus = L.DomUtil.create("div", "gnss-status");
+  private panelList: HTMLElement | null = null;
 
   constructor(containerId: string) {
     this.map = L.map(containerId).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
@@ -364,6 +366,15 @@ export class AircraftMap {
     mark();
 
     this.setupDbControls(list);
+    this.panelList = list;
+  }
+
+  // Extra section at the bottom of the layer switcher's panel, for the
+  // caller's own settings (e.g. the "Advanced" section in advanced.ts).
+  addPanelSection(className: string): HTMLElement {
+    const list = this.panelList ?? this.map.getContainer();
+    L.DomUtil.create("div", "leaflet-control-layers-separator", list);
+    return L.DomUtil.create("div", className, list);
   }
 
   // Aircraft database: downloaded only on request, straight from GitHub

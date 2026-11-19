@@ -62,7 +62,13 @@ aircraft table + publish), all in `src/adsb.cpp`.
   `lib/libmodes/include/mode-s.h`): DF18 aliased into the DF17 ME-decode
   path, geometric-altitude delta (ME19), Operational Status fields (ME31
   subtype 0), emergency/squawk (ME28 subtype 1), and NIC-B (ME bit 8 of
-  airborne positions). CRC is check-only — no bit-error correction.
+  airborne positions). Plus decode fixes: Q=0 altitudes (100 ft Gillham
+  code from older GA encoders — upstream returned 0, shown as FL000)
+  via readsb's `modeAToModeC` algorithm, undecodable altitude →
+  `altitude_valid = 0`; ME19 raw values offset by one (0 = no info) and
+  scaled (vertical rate ×64 ft/min, geo delta ×25 ft, supersonic ×4 kt),
+  each with a `*_valid` flag; ME28 squawk hex-coded (`0x7700`). CRC is
+  check-only — no bit-error correction.
 - **NIC** (`src/nic.h`, header-only, plain C): `adsb_compute_nic()` turns
   the position type code plus NIC-A (from ME31) and NIC-B into the
   position's integrity category, same mapping as readsb's
@@ -82,7 +88,8 @@ aircraft table + publish), all in `src/adsb.cpp`.
   at most once per second, only when new messages arrived since the last
   publish (on-change, not a fixed heartbeat) — mirrors readsb's
   `aircraft.json` field names (`hex`, `flight`, `category`, `alt_baro`,
-  `alt_geom`, `gs`, `track`, `baro_rate`, `squawk`, `emergency`, `lat`,
+  `alt_geom`, `gs`, `track`, `baro_rate`/`geom_rate` (by the vertical
+  rate's source bit), `squawk`, `emergency`, `lat`,
   `lon`, `seen_pos`, `nic`, `version`, `nic_baro`, `nac_p`, `sil`,
   `sil_type`, `gva`, `seen`, `messages`); fields are omitted, not
   zero-filled, until decoded at least once. `category` is readsb's
@@ -109,9 +116,9 @@ with a GNS5892R module (see README.md for datasheet link).
 ## Web viewer (`webapp/`)
 
 Browser-only ADS-B map viewer — Vite + vanilla TypeScript, bun package
-manager, no server. Connects over the Web Serial API (or an MQTT broker
+manager, static files only (no backend; hosted as a PWA, see below). Connects over the Web Serial API (or an MQTT broker
 feed, see `mqtt-feed.ts`) and plots aircraft on
-a Leaflet map (`webapp/src/map.ts`; OSM/OpenTopoMap bases + openflightmaps
+a Leaflet map (`webapp/src/map.ts`; OSM/OpenTopoMap/Esri World Imagery bases + openflightmaps
 overlay, tiles cached offline — see `tile-cache.ts` below).
 
 ```sh
@@ -120,7 +127,35 @@ bun install
 bun dev             # http://localhost:5173
 bun run build       # tsc + vite build -> webapp/dist
 bun test            # decoder, NIC, display, list, database + geo unit tests, no hardware needed
+bun run preview     # serve dist on http://localhost:4173 (PWA/offline test)
+bun run deploy      # test + build + rsync to Hetzner (scripts/deploy-hetzner.sh)
+bun run rollback    # restore the previous deploy (/apps/adsb.prev)
 ```
+
+**PWA / hosting**: `base: "./"` (relative), so the same build runs on
+the Hetzner vhost `adsb.wetterheidi.de` (`/apps/adsb`, nginx + certbot,
+Pförtner login gate by default — `PFOERTNER` in the deploy script),
+under `bun run preview`, or any subpath. GitHub Pages deploy was
+removed. `vite.config.ts` `serviceWorker()` writes `dist/sw.js` after
+the build from `src/sw-template.js` (plain JS, not bundled): precaches
+every dist file, cache name `adsb-<hash over template + files>`,
+cache-first for same-origin GETs (`ignoreVary` — the crossorigin module
+script request carries `Origin`, precache fetches don't, and servers
+may send `Vary: Origin`), navigations get the cached `./`; cross-origin
+(tiles, aircraft DB) untouched. Install fails on a redirected response
+(login gate) rather than caching the login page. `main.ts` registers it
+in production only and toasts on update. Manifest `public/manifest.webmanifest`
+(linked with `crossorigin="use-credentials"` for the gate), icons
+`public/icon.svg` → `icon-192.png`/`icon-512.png` (rendered with
+`rsvg-convert`). User guide (German): `docs/PWA.md`.
+
+**UI = the Android app's**: same `index.html` structure (colour-dot
+`#connect-btn` with `data-state` disconnected/connecting/connected/error,
+`#status-msg` toast) and one shared `webapp/src/style.css` (the app
+imports it, no copy). `main.ts` auto-connects silently on startup and on
+`navigator.serial`/`navigator.usb` `connect` events, but only to devices
+granted on an earlier visit (`getPorts()`/`getDevices()`); a click opens
+the picker and reports errors (closing the picker isn't one).
 
 **Two input modes, auto-detected by first line character** (`webapp/src/main.ts`
 `handleLine`): `{` → NDJSON from this repo's dongle firmware (parsed by
@@ -141,17 +176,30 @@ popup. Tested in `protocol.test.ts` and `nav.test.ts`.
 **Transport layer** (`transport.ts` + three `transport-*.ts` drivers):
 `navigator.serial` (Web Serial) exists only on desktop Chrome/Edge —
 **Android Chrome has no Web Serial API at all** — so `main.ts`
-`requestTransport()` falls back to WebUSB (`navigator.usb`) there:
+`findTransport()` falls back to WebUSB (`navigator.usb`) there:
 
 - **`transport.ts`**: `ByteTransport` interface (`open`/`close`/`read`/
   `write`/`setOnDisconnect`) all three drivers implement, plus `LineReader`
   — the transport-agnostic baud auto-probe (opens at each rate in the
   caller-supplied `probeOrder`, watches `PROBE_WINDOW_MS` (2 s) for a line
-  matching `isValidLine`) and NDJSON/raw-frame line-splitting logic,
-  shared across all three transports.
+  matching `isValidLine`, falls back to the last rate) and NDJSON/raw-frame
+  line-splitting logic, shared across all three transports. The probe
+  discards everything read in the first `PROBE_SETTLE_MS` (300 ms): an
+  FTDI chip keeps receiving at the old rate while closed and hands over
+  ~512 bytes of perfectly valid frames on the next open, which locked
+  115200 for the 921600 module. `main.ts` passes `protocol.ts`
+  `isPlausibleLine` (complete `*hex;` or `+SShex;` frame, JSON object, or printable
+  `#` reply) — `classifyLine`'s first-character check alone matched line
+  noise. Covered by `transport.test.ts` (fake FTDI) and
+  `protocol.test.ts`.
 - **`transport-webserial.ts`**: thin `ByteTransport` wrapper around
   `navigator.serial` (desktop). `requestWebSerialTransport()` calls
-  `requestPort()`.
+  `requestPort()`. `open()` follows Chrome's DTR+RTS assert with an
+  esptool-style reset (`resetIntoFirmware`: DTR=0/RTS=1, 100 ms,
+  DTR=0/RTS=0) — on Windows the ESP32-C6's USB-Serial/JTAG otherwise
+  ended up silent in ROM download mode (suspected: driver sets the two
+  lines one after the other). Every connect (and each probe rate)
+  therefore reboots the dongle; no-op for an FTDI-wired module.
 - **`transport-ftdi.ts`**: hand-rolled WebUSB driver for FTDI FT230X/
   FT232R-family chips (the FTDI USB-UART adapter used to wire a module
   directly, per README.md) — no vendor SDK, protocol is the well-known
@@ -171,11 +219,11 @@ popup. Tested in `protocol.test.ts` and `nav.test.ts`.
   monitor. **Caveat**: only works if Android's own kernel `cdc_acm`
   driver hasn't already claimed the interface — if it has,
   `claimInterface()` throws and that error propagates up to the
-  toolbar's connect-error display (`connStatus.textContent`) rather than
+  connect-error toast (red dot) rather than
   failing silently; nothing further can be done about it from the
   browser (WebUSB can't detach a bound kernel driver).
 
-`main.ts` `requestTransport()`: Web Serial when present (desktop) →
+`main.ts` `findTransport()`: Web Serial when present (desktop) →
 probe order `[115200, 921600]`; else WebUSB device picker filtered to
 FTDI vendor ID (0x0403), CDC comm class, or composite/IAD class, then
 `FtdiTransport.matches(device)` picks the FTDI driver vs. CDC-ACM →
@@ -188,7 +236,8 @@ direct-wired module, not the dongle).
   code (`mode_s_detect`, magnitude vectors) is not ported since input
   frames arrive already framed, same as the firmware. Carries the same
   local patches as `lib/libmodes` (DF18 aliasing, ME19 geo−baro
-  delta, ME31 opstatus fields, ME28 emergency/squawk, NIC-B) — see comment block
+  delta, ME31 opstatus fields, ME28 emergency/squawk, NIC-B, and the
+  Gillham-altitude/ME19-scaling/squawk decode fixes) — see comment block
   at top of `lib/libmodes/include/mode-s.h` for patch details, which apply
   identically here. CRC is check-only, matching firmware config
   (`fix_errors=0`, `aggressive=0`).
@@ -206,8 +255,9 @@ direct-wired module, not the dongle).
 - **`tile-cache.ts`** (used only by `map.ts`, so the Android app gets it
   too): offline tile cache on top of
   [`leaflet.offline`](https://github.com/allartk/leaflet.offline)
-  (IndexedDB db `leaflet.offline`). `LAYER_DEFS`: bases OSM (default) and
-  OpenTopoMap, overlay openflightmaps aero — selection persisted in
+  (IndexedDB db `leaflet.offline`). `LAYER_DEFS`: bases OSM (default),
+  OpenTopoMap and Esri World Imagery (satellite; ArcGIS URL order
+  `{z}/{y}/{x}`), overlay openflightmaps aero — selection persisted in
   `localStorage` (`adsb.layers`), switched via a stock `L.control.layers`.
   Every layer has `maxNativeZoom` = its `nativeMax` (12; OFM 11), so higher
   zooms are upscaled rather than fetched — keeps offline and online
@@ -236,17 +286,26 @@ direct-wired module, not the dongle).
   condition — no Node polyfills. After `MAX_RECONNECTS` (3) failed 3 s
   reconnects it ends the client and calls `onLost`. `brokerUrl()` builds
   `ws(s)://host:port` + TXT `path` (default `/mqtt`); `isMixedContent()`
-  flags `ws://` from an https page, which browsers block — so the GitHub
-  Pages build can only reach `wss://` brokers. Webapp UI: URL field
-  (`localStorage` `adsb.mqttUrl`) + MQTT button in the toolbar; serial and
-  MQTT are mutually exclusive (`source` in `main.ts`). Used by the app
+  flags `ws://` from an https page, which browsers block — so the hosted
+  https build can only reach `wss://` brokers. Webapp UI: deliberately
+  not in the toolbar (expert option) — URL field (`localStorage`
+  `adsb.mqttUrl`) + Connect button in the collapsed "Advanced" section at
+  the bottom of the layer switcher (`advanced.ts` `advancedSection()`,
+  via `AircraftMap.addPanelSection()`; CSS `.advanced-options`). The
+  colour dot shows either source and a tap disconnects whichever is
+  active; serial and MQTT are mutually exclusive (`source` in `main.ts`),
+  and serial auto-connect never replaces an active feed. Used by the app
   too. Tested in `mqtt-feed.test.ts`.
 - **`modes.test.ts`**: unit tests using known-good DF17 example frames from
   the [GNS5892 command interface doc](https://www.gns-electronics.de/wp-content/uploads/2019/10/GNS5892-command-interface-V1.0.pdf).
   Expected values were cross-checked by compiling and running
   `lib/libmodes/src/mode-s.c` directly on the same frames (see git history
   for the one-off comparison script) — confirms bit-level parity with the
-  firmware decoder, not just internal self-consistency.
+  firmware decoder, not just internal self-consistency. Field-decoding
+  tests anchor on "The 1090 MHz Riddle" textbook frames (38000 ft;
+  159 kt / 182.88° / −832 ft/min / +550 ft) and round-trip every Q=0
+  altitude (−1200…126700 ft) through an independent Gillham encoder
+  written in the test.
 - **`map.ts`** (`AircraftMap`): one `Track` per ICAO address with a
   position — marker (rotation, fill colour and label are patched into its
   DOM element per update; the `L.divIcon` is only swapped when the shape
@@ -268,8 +327,8 @@ direct-wired module, not the dongle).
   `no-labels` class on the map container. Range rings (`RINGS_KM`) follow
   `setMyLocation`. The Twemoji flag font is registered from TS via
   `FontFace` (so the app gets it without CSS changes); the `.flag`,
-  `.plane-label`, `.ring-label` and view-option CSS is in both style.css
-  files.
+  `.plane-label`, `.ring-label` and view-option CSS is in
+  `webapp/src/style.css` (shared with the app).
   FL filter: `setHidden()` takes marker, trail group and lead vector off
   the map for tracks outside `list.band` (re-checked per `upsert` and on
   band change); hidden tracks keep recording and are skipped by the GNSS
@@ -281,7 +340,7 @@ direct-wired module, not the dongle).
   map container (`#app`), so both webapp and app get it without
   index.html changes. Top right on wide screens; at ≤ 600 px a pill at the
   bottom that opens into a bottom sheet and closes on row click (CSS in
-  both style.css files, safe-area aware). Re-rendered once a second by
+  `webapp/src/style.css`, safe-area aware). Re-rendered once a second by
   `AircraftMap` (`LIST_TICK_MS`), not per frame; clicks via delegation on
   `tbody`. Columns Flight/Alt/Speed/Dist/RSSI/GNSS (RSSI sort value is
   negated so the default ascending order = strongest first). Pure, tested
@@ -352,14 +411,19 @@ widens dev-server `fs.allow` to reach it). Modules under `../webapp/src`
 resolve bare imports from `app/node_modules`, so any dependency they use
 (`leaflet`, `leaflet.offline`, `mqtt`) must be listed in **both** `package.json`s.
 **`webapp/` is never modified just for the app** — the app only reads
-from it; shared code (e.g. `mqtt-feed.ts`) lives there only when the
-webapp uses it too. `app/src/style.css` is a copy of webapp's — CSS added
-there (e.g. `.tile-status`, the aircraft label/flag/view-option rules) must be copied over by hand — (plus
-`env(safe-area-inset-*)` padding for the toolbar/stats since this runs
-edge-to-edge in a native shell), and `app/src/main.ts` is a copy of
+from it; shared code (e.g. `mqtt-feed.ts`, `advanced.ts`) lives there only when the
+webapp uses it too. Styling is shared: `app/src/main.ts` imports
+`../../webapp/src/style.css` directly (no copy — app-only rules such as
+the source picker's live there too; its
+`var(--safe-area-inset-*, env(...))` padding serves the edge-to-edge
+native shell and the installed PWA alike). `app/index.html` and
+webapp's have the same body markup. `app/src/main.ts` is a copy of
 webapp's `main.ts` with the transport section and geolocation source
-swapped for native equivalents — everything else (mode autodetect,
-`#49-03\r`, stats overlay, TTL sweep) is identical logic, just re-wired.
+swapped for native equivalents, and two deliberate differences: fixed
+921600 baud via `connectAt` (no probe — its close+reopen raced the
+native driver's teardown) and the `#49-03\r` command commented out.
+Everything else (mode autodetect, toast, colour-dot state, auto-connect,
+stats overlay, TTL sweep) is the same logic.
 
 ```sh
 cd app
@@ -385,6 +449,14 @@ Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
   `webapp/src/main.ts`; USB at fixed `BAUD` 921600 via `connectAt` (no
   probe). Input source state machine (`source`: `none`/`usb`/`mqtt`,
   exactly one at a time):
+  - `mqttEnabled`: on Android the broker feed is an expert option, off
+    by default — checkbox "MQTT broker feed" in the "Advanced" section
+    of the layer switcher (`webapp/src/advanced.ts`), `localStorage`
+    `adsb.mqttFeed` = `"1"`. While off: `rescan()` and `autoSelect()`
+    return early (no mDNS watch, no picker), a tap on the dot calls
+    `connectUsb(false)` directly. Switching it off closes the picker,
+    stops discovery and swaps an active feed for USB. iOS (`!HAS_USB`):
+    always on, no checkbox.
   - Startup: `connectUsb(silent)` (Android), then `rescan()` (mDNS).
     The plugin's `attached` event → `connectUsb`, which replaces a
     broker feed (USB wins). USB unplug / broker lost → `onDisconnect` →
@@ -398,7 +470,8 @@ Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
     connect).
   - The button stays a colour LED (no text); the source ("USB 921600",
     "MQTT <broker>") goes into its title/aria-label and a toast.
-    Tap connected → disconnect; tap idle → picker.
+    Tap connected → disconnect; tap idle → picker (USB directly while
+    `mqttEnabled` is off).
   - `@capacitor/app` `appStateChange`: on background, end the broker
     feed and stop mDNS (iOS kills sockets anyway); on resume `rescan()`,
     and the remembered broker reconnects. USB untouched. Geolocation uses `@capacitor/geolocation`'s
@@ -411,8 +484,8 @@ Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
   instance name (Android NSD lowercases names). `start()` clears the list
   — NSD/Bonjour `removed` events are unreliable, a restart is the
   refresh. Modeled on mdns-mqtt-vue3's `useMqttDiscovery`.
-- **`source-picker.ts`** (`SourcePicker`): bottom-sheet modal (CSS in
-  `app/src/style.css` only) listing USB (if attached) + brokers;
+- **`source-picker.ts`** (`SourcePicker`): bottom-sheet modal (CSS
+  `#source-picker` in the shared `webapp/src/style.css`) listing USB (if attached) + brokers;
   refreshed live from `discovery.onChange`.
 - **`capacitor.config.ts`**: `server.androidScheme: "http"` +
   `cleartext: true` — an https WebView origin would block `ws://`
