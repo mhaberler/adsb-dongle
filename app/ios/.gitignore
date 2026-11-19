@@ -11,3 +11,6 @@ capacitor-cordova-ios-plugins
 # Generated Config files
 App/App/capacitor.config.json
 App/App/config.xml
+
+# Standalone resolve of CapApp-SPM (IDE); Xcode uses the workspace Package.resolved
+App/CapApp-SPM/Package.resolved
