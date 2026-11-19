@@ -15,13 +15,13 @@
     "@types/leaflet": "^1.9.22",
     "@types/w3c-web-serial": "^1.0.9",
     "@types/w3c-web-usb": "^1.0.14",
-    "bun-types": "^1.4.4",
+    "bun-types": "^1.4.5",
     "typescript": "~7.0.2",
-    "vite": "^8.3.5"
+    "vite": "^8.3.8"
   },
   "dependencies": {
     "leaflet": "^1.9.4",
-    "leaflet.offline": "^3.2.1",
+    "leaflet.offline": "^3.2.2",
     "mqtt": "^5.16.1"
   }
 }
