@@ -124,6 +124,7 @@ function popupHtml(
     ["emergency", ac.emergency],
     ["GNSS", gnssText(ac)],
     ["distance", dist === undefined ? undefined : `${dist.toFixed(dist < 10 ? 1 : 0)} km`],
+    ["rssi", ac.rssi === undefined ? undefined : `${ac.rssi.toFixed(1)} dBFS`],
     ["seen", `${ac.seen.toFixed(1)}s`],
   ];
   const lines = rows
@@ -195,6 +196,7 @@ export class AircraftMap {
   private leadLayer = L.layerGroup();
   private ringLayer = L.layerGroup();
   private gnssStatus = L.DomUtil.create("div", "gnss-status");
+  private panelList: HTMLElement | null = null;
 
   constructor(containerId: string) {
     this.map = L.map(containerId).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
@@ -364,6 +366,15 @@ export class AircraftMap {
     mark();
 
     this.setupDbControls(list);
+    this.panelList = list;
+  }
+
+  // Extra section at the bottom of the layer switcher's panel, for the
+  // caller's own settings (e.g. the "Advanced" section in advanced.ts).
+  addPanelSection(className: string): HTMLElement {
+    const list = this.panelList ?? this.map.getContainer();
+    L.DomUtil.create("div", "leaflet-control-layers-separator", list);
+    return L.DomUtil.create("div", className, list);
   }
 
   // Aircraft database: downloaded only on request, straight from GitHub

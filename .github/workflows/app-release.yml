@@ -1,0 +1,175 @@
+# Android debug APK + iOS IPA for the Capacitor app (app/).
+#
+# - tag v<semver>: both builds attached to a GitHub Release; the IPA is also
+#   uploaded to TestFlight
+# - workflow_dispatch: the same builds as workflow artifacts, no uploads
+#
+# iOS signing uses Xcode's automatic (cloud-managed) signing with an App
+# Store Connect API key (secrets ASC_KEY_P8 (base64), ASC_KEY_ID,
+# ASC_ISSUER_ID) - no certificates or profiles are stored. Same setup as
+# mdns-mqtt-vue3.
+
+name: app-release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install webapp dependencies
+        # app/ imports the shared decode/map pipeline from ../webapp/src
+        # (see CLAUDE.md); its node_modules (leaflet, etc.) must exist
+        # too, since Node module resolution for those imports walks up
+        # from webapp/src, not from app/.
+        working-directory: webapp
+        run: bun install --frozen-lockfile
+
+      - name: Install app dependencies
+        working-directory: app
+        run: bun install --frozen-lockfile
+
+      - name: Build web assets and sync Android
+        working-directory: app
+        run: bun run build && bunx cap sync android
+
+      - name: Build debug APK
+        working-directory: app/android
+        run: ./gradlew assembleDebug
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: app-debug
+          path: app/android/app/build/outputs/apk/debug/app-debug.apk
+
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Select newest Xcode
+        run: |
+          xc="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$xc"
+          xcodebuild -version
+
+      - name: Version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=0.0.0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install webapp dependencies
+        working-directory: webapp
+        run: bun install --frozen-lockfile
+
+      # Must precede cap sync and the build: CapApp-SPM/Package.swift
+      # references each plugin by a relative path into node_modules.
+      - name: Install app dependencies
+        working-directory: app
+        run: bun install --frozen-lockfile
+
+      - name: Build web assets and sync iOS
+        working-directory: app
+        run: bun run build && bunx cap sync ios
+
+      - name: App Store Connect API key
+        env:
+          P8: ${{ secrets.ASC_KEY_P8 }}
+          KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ISSUER: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          if [[ -z "$P8" || -z "$KEY_ID" || -z "$ISSUER" ]]; then
+            echo "::error::ASC_KEY_P8 / ASC_KEY_ID / ASC_ISSUER_ID secrets missing"; exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/asc"
+          # Apple's tools expect the downloaded key's name, AuthKey_<KEY_ID>.p8.
+          key="$RUNNER_TEMP/asc/AuthKey_$KEY_ID.p8"
+          echo "$P8" | base64 -d > "$key"
+          if ! grep -q -- '-----BEGIN PRIVATE KEY-----' "$key"; then
+            echo "::error::ASC_KEY_P8 does not decode to a .p8 private key"; exit 1
+          fi
+          echo "ASC_KEY_FILE=$key" >> "$GITHUB_ENV"
+
+      # Archive unsigned; signing happens at export, where
+      # -allowProvisioningUpdates + the API key fetch the profile and use the
+      # cloud-managed distribution certificate.
+      - name: Archive (unsigned)
+        working-directory: app
+        run: |
+          xcodebuild archive \
+            -project ios/App/App.xcodeproj -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            MARKETING_VERSION=$VERSION \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+
+      - name: Export signed IPA
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportOptionsPlist ci/ExportOptions-export.plist \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_FILE" \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "$RUNNER_TEMP"/export/*.ipa "$RUNNER_TEMP/out/adsb-dongle-$VERSION.ipa"
+
+      - name: Upload to TestFlight
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportOptionsPlist ci/ExportOptions-upload.plist \
+            -exportPath "$RUNNER_TEMP/upload" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_FILE" \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios
+          path: ${{ runner.temp }}/out/*.ipa
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [android, ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: out
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: out/*
+          generate_release_notes: true

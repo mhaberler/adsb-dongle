@@ -89,3 +89,30 @@ describe("computeNic", () => {
     expect(ev.kind === "update" && ev.data.nic).toBe(8);
   });
 });
+
+describe("rssi", () => {
+  const frame = () => hexToBytes("8D4840D6202CC371C32CE0576098");
+  const rssiOf = (store: AircraftStore, signal?: number) => {
+    const [ev] = store.processFrame(frame(), signal);
+    return ev.kind === "update" ? ev.data.rssi : undefined;
+  };
+
+  test("absent without signal", () => {
+    expect(rssiOf(new AircraftStore())).toBeUndefined();
+  });
+
+  test("readsb formula, SS = 0x10", () => {
+    const store = new AircraftStore();
+    expect(rssiOf(store, (16 / 255) ** 2)).toBe(-24.0);
+  });
+
+  test("mean of the last 8 only", () => {
+    const store = new AircraftStore();
+    for (let i = 0; i < 8; i++) rssiOf(store, 1);
+    // 9th sample replaces the 1st: mean = (7 + 0.0039) / 8
+    expect(rssiOf(store, (16 / 255) ** 2)).toBe(-0.6);
+    // frames without signal leave the window alone
+    expect(rssiOf(store)).toBe(-0.6);
+  });
+});
+

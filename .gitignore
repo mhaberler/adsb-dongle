@@ -12,3 +12,4 @@ app/dist/
 .claude/
 skills-lock.json
 .cc-history/
+.mcp.json

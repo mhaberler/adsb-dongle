@@ -22,6 +22,16 @@ describe("sortRows", () => {
     expect(hexes(sortRows(rows(), "dist", 1))).toEqual(["bbbbbb", "dddddd", "aaaaaa", "cccccc"]);
   });
 
+  test("rssi: strongest first ascending, missing last both ways", () => {
+    const r = (): ListRow[] => [
+      { ac: ac("aaaaaa", { rssi: -30 }) },
+      { ac: ac("bbbbbb") },
+      { ac: ac("cccccc", { rssi: -12.5 }) },
+    ];
+    expect(hexes(sortRows(r(), "rssi", 1))).toEqual(["cccccc", "aaaaaa", "bbbbbb"]);
+    expect(hexes(sortRows(r(), "rssi", -1))).toEqual(["aaaaaa", "cccccc", "bbbbbb"]);
+  });
+
   test("descending keeps missing values at the bottom", () => {
     expect(hexes(sortRows(rows(), "alt", -1))).toEqual(["aaaaaa", "bbbbbb", "dddddd", "cccccc"]);
   });

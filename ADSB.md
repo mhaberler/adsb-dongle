@@ -6,6 +6,14 @@ decoded on-device (Mode-S DF17/DF18) and published per aircraft as
 readsb aircraft.json-style JSON objects to
 `{hostname}/ADSB/{icao}`.
 
+> **Live sensorpod topics differ from this design** (observed on
+> `esp32p4-e185df`, 2026-10): no `{hostname}/` prefix. The pod publishes
+> `ADSB/{icao}` (decoded JSON, `category` still numeric), `ihex` (one raw
+> `*<hex>;` frame per message), `status` (with the `adsb_*` counters) and
+> `ble/*`. The broker is advertised via mDNS as `_mqtt-ws._tcp` (TXT
+> `path=/mqtt`, WebSocket port 8080) and `_mqtt._tcp` (1883). This repo's
+> webapp/app consume `ihex` only - see `docs/adr/0001-mqtt-consumes-raw-frames.md`.
+
 ## Module
 
 Rextron 89001090, TTL UART, fixed 921600 Bd / 8N1, no flow control.

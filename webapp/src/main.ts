@@ -3,10 +3,12 @@ import { LineReader, type ByteTransport } from "./transport";
 import { grantedWebSerialTransport, requestWebSerialTransport } from "./transport-webserial";
 import { FtdiTransport } from "./transport-ftdi";
 import { CdcAcmTransport } from "./transport-cdcacm";
-import { classifyLine, isPlausibleLine, parseLine, parseRawFrame } from "./protocol";
+import { classifyLine, isPlausibleLine, parseLine, parseRawFrame, parseRawSignal } from "./protocol";
 import type { StatsMessage } from "./protocol";
 import { AircraftMap } from "./map";
 import { AircraftStore } from "./aircraft-store";
+import { MqttFeed, RAW_FRAME_TOPIC, isMixedContent } from "./mqtt-feed";
+import { advancedSection } from "./advanced";
 
 const connectBtn = document.querySelector<HTMLButtonElement>("#connect-btn")!;
 const statusMsg = document.querySelector<HTMLDivElement>("#status-msg")!;
@@ -28,6 +30,31 @@ function toast(msg: string, ms = 4000): void {
 
 const map = new AircraftMap("map");
 const lineReader = new LineReader();
+const mqttFeed = new MqttFeed();
+
+// MQTT broker feed (sensorpod): an expert option, so it lives collapsed in
+// the layer switcher's "Advanced" section instead of the toolbar.
+const MQTT_URL_KEY = "adsb.mqttUrl";
+const mqttBox = advancedSection(map);
+mqttBox.innerHTML =
+  `<div>MQTT broker feed</div>` +
+  `<div class="adv-hint">Raw frames from a sensorpod broker (topic ${RAW_FRAME_TOPIC}) ` +
+  `instead of a USB receiver.</div>` +
+  `<div class="adv-row"><input type="url" spellcheck="false" aria-label="MQTT broker WebSocket URL" /></div>` +
+  `<div class="adv-row"><button type="button">Connect</button></div>`;
+const mqttUrl = mqttBox.querySelector("input")!;
+const mqttBtn = mqttBox.querySelector("button")!;
+mqttUrl.placeholder = "ws://host:8080/mqtt";
+mqttUrl.value = "ws://esp32p4-e185df.local:8080/mqtt";
+try {
+  mqttUrl.value = localStorage.getItem(MQTT_URL_KEY) ?? mqttUrl.value;
+} catch {
+  // storage unavailable: keep the default
+}
+
+// Exactly one input source at a time: a serial link or a broker feed.
+type Source = "none" | "serial" | "mqtt";
+let source: Source = "none";
 
 // Baud probe order favors the direct-wired module's 921600 on the WebUSB
 // path (Android + WebUSB almost always means the FTDI-adapted module, not
@@ -107,21 +134,27 @@ function renderStats(s: StatsMessage): void {
 
 type ConnState = "disconnected" | "connecting" | "connected" | "error";
 
-// The button is a bare colour swatch, so connection state lives here rather
-// than being inferred from its label.
-let connState: ConnState = "disconnected";
+// The button is a bare colour swatch: its state is a data attribute, the
+// active source is `source` above.
 let connecting = false;
 
 function setState(state: ConnState): void {
-  connState = state;
   connectBtn.dataset.state = state;
   const label = state === "connected" ? "Disconnect" : "Connect";
   connectBtn.title = label;
   connectBtn.setAttribute("aria-label", label);
 }
 
-function setConnected(connected: boolean): void {
-  setState(connected ? "connected" : "disconnected");
+// The colour dot shows either source; a tap on it disconnects whichever
+// is active.
+function setSource(next: Source): void {
+  source = next;
+  setState(next === "none" ? "disconnected" : "connected");
+  if (next === "mqtt") {
+    connectBtn.title = `MQTT ${RAW_FRAME_TOPIC} - tap to disconnect`;
+    connectBtn.setAttribute("aria-label", connectBtn.title);
+  }
+  mqttBtn.textContent = next === "mqtt" ? "Disconnect" : "Connect";
 }
 
 // Used only during baud auto-probe: a line is "valid" if it's a recognized
@@ -158,7 +191,7 @@ function handleRawLine(line: string): void {
     return;
   }
 
-  for (const event of rawStore.processFrame(frame)) {
+  for (const event of rawStore.processFrame(frame, parseRawSignal(line))) {
     if (event.kind === "update") map.upsert(event.data);
     else map.remove(event.hex);
   }
@@ -175,7 +208,7 @@ function handleLine(line: string): void {
   if (mode === "ndjson") {
     handleNdjsonLine(line);
   } else if (mode === "raw") {
-    if (!rawCommandSent) {
+    if (!rawCommandSent && source === "serial") {
       rawCommandSent = true;
       // GNS5892 command interface: "#49-03<CR>" = DF17/18/19-only output
       // mode. Harmless no-op if this line actually came via an ESP32
@@ -211,13 +244,21 @@ function resetState(): void {
 }
 
 function onDisconnect(): void {
-  setConnected(false);
+  setSource("none");
   statsEl.textContent = "";
   resetState();
 }
 
+async function disconnectSource(): Promise<void> {
+  if (source === "serial") await lineReader.disconnect();
+  else if (source === "mqtt") mqttFeed.disconnect();
+  if (source !== "none") onDisconnect();
+}
+
+// Serial link (Web Serial / WebUSB). Never replaces an active broker feed
+// on its own - only a click does.
 async function connect(ask: boolean): Promise<void> {
-  if (connecting || connState === "connected") return;
+  if (connecting || source !== "none") return;
   connecting = true;
   setState("connecting");
   try {
@@ -228,7 +269,7 @@ async function connect(ask: boolean): Promise<void> {
       return;
     }
     await lineReader.connect(pick.transport, pick.probeOrder, isRecognizedLine, handleLine, onDisconnect);
-    setConnected(true);
+    setSource("serial");
   } catch (err) {
     // Auto-connect attempts (startup, device plugged in) stay quiet; a
     // Connect click always reports. Closing the picker without choosing
@@ -245,12 +286,49 @@ async function connect(ask: boolean): Promise<void> {
 }
 
 connectBtn.addEventListener("click", async () => {
-  if (connState === "connected") {
-    await lineReader.disconnect();
-    onDisconnect();
+  if (source !== "none") {
+    await disconnectSource();
     return;
   }
   await connect(true);
+});
+
+mqttBtn.addEventListener("click", async () => {
+  if (source === "mqtt") {
+    await disconnectSource();
+    return;
+  }
+  if (connecting) return;
+
+  const url = mqttUrl.value.trim();
+  if (!url) return;
+  if (isMixedContent(location.protocol, url)) {
+    toast("ws:// is blocked on an https page - use wss:// or run the webapp over http (bun dev)", 8000);
+    return;
+  }
+  try {
+    localStorage.setItem(MQTT_URL_KEY, url);
+  } catch {
+    // not remembered, still connect
+  }
+  connecting = true;
+  setState("connecting");
+  try {
+    await disconnectSource();
+    resetState();
+    await mqttFeed.connect(url, RAW_FRAME_TOPIC, handleLine, () => {
+      onDisconnect();
+      setState("error");
+      toast("MQTT broker lost");
+    });
+    setSource("mqtt");
+    toast(`MQTT ${RAW_FRAME_TOPIC}`, 2500);
+  } catch (err) {
+    setState("error");
+    toast((err as Error).message);
+  } finally {
+    connecting = false;
+  }
 });
 
 // Auto-connect, like the Android app: on startup and whenever a device is
