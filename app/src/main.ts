@@ -12,6 +12,7 @@ import { AircraftStore } from "../../webapp/src/aircraft-store";
 import { MqttFeed, RAW_FRAME_TOPIC } from "../../webapp/src/mqtt-feed";
 import { BrokerDiscovery, type Broker } from "./broker-discovery";
 import { SourcePicker, type PickerItem } from "./source-picker";
+import { advancedSection } from "../../webapp/src/advanced";
 
 const connectBtn = document.querySelector<HTMLButtonElement>("#connect-btn")!;
 const statusMsg = document.querySelector<HTMLDivElement>("#status-msg")!;
@@ -68,6 +69,47 @@ const REMEMBERED_WAIT_MS = 5000;
 let scanStartedAt = 0;
 let autoPickerShown = false;
 let usbPresent = false;
+
+// MQTT broker feed (sensorpod) is an expert option on Android: off by
+// default, switched on under "Advanced" in the layer switcher. While off
+// there's no mDNS scan and no source picker - Connect goes straight to
+// USB. iOS has no USB, so there the feed is the only source and always on.
+const MQTT_ON_KEY = "adsb.mqttFeed";
+let mqttEnabled = !HAS_USB;
+try {
+  if (HAS_USB) mqttEnabled = localStorage.getItem(MQTT_ON_KEY) === "1";
+} catch {
+  // storage unavailable: default off
+}
+
+if (HAS_USB) {
+  const box = advancedSection(map);
+  box.innerHTML =
+    `<label><input type="checkbox" class="leaflet-control-layers-selector" /> MQTT broker feed</label>` +
+    `<div class="adv-hint">Find sensorpod brokers on the Wi-Fi and offer them next to USB.</div>`;
+  const input = box.querySelector("input")!;
+  input.checked = mqttEnabled;
+  input.addEventListener("change", () => void setMqttEnabled(input.checked));
+}
+
+async function setMqttEnabled(on: boolean): Promise<void> {
+  mqttEnabled = on;
+  try {
+    localStorage.setItem(MQTT_ON_KEY, on ? "1" : "0");
+  } catch {
+    // not remembered across restarts
+  }
+  if (on) {
+    await rescan();
+    return;
+  }
+  picker.close();
+  await discovery.stop();
+  if (source === "mqtt") {
+    await disconnectSource();
+    void connectUsb(true);
+  }
+}
 
 async function initGeolocation(): Promise<void> {
   try {
@@ -292,7 +334,7 @@ async function connectMqtt(broker: Broker, silent: boolean): Promise<void> {
 // REMEMBERED_WAIT_MS if a remembered broker exists but isn't advertised.
 function autoSelect(): void {
   // An open picker means the user (or an earlier auto-offer) is choosing.
-  if (source !== "none" || connecting || manualOff || paused || picker.isOpen) return;
+  if (!mqttEnabled || source !== "none" || connecting || manualOff || paused || picker.isOpen) return;
   const brokers = discovery.list();
   const remembered = localStorage.getItem(REMEMBERED_KEY);
   const match = brokers.find((b) => b.key === remembered);
@@ -327,6 +369,7 @@ async function openPicker(): Promise<void> {
 }
 
 async function rescan(): Promise<void> {
+  if (!mqttEnabled) return;
   await discovery.stop();
   scanStartedAt = Date.now();
   autoPickerShown = false;
@@ -351,7 +394,8 @@ connectBtn.addEventListener("click", async () => {
     return;
   }
   manualOff = false;
-  await openPicker();
+  if (mqttEnabled) await openPicker();
+  else await connectUsb(false);
 });
 
 // Broker feed sockets don't survive iOS suspension, and an mDNS watch in the

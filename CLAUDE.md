@@ -449,6 +449,14 @@ Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
   `webapp/src/main.ts`; USB at fixed `BAUD` 921600 via `connectAt` (no
   probe). Input source state machine (`source`: `none`/`usb`/`mqtt`,
   exactly one at a time):
+  - `mqttEnabled`: on Android the broker feed is an expert option, off
+    by default — checkbox "MQTT broker feed" in the "Advanced" section
+    of the layer switcher (`webapp/src/advanced.ts`), `localStorage`
+    `adsb.mqttFeed` = `"1"`. While off: `rescan()` and `autoSelect()`
+    return early (no mDNS watch, no picker), a tap on the dot calls
+    `connectUsb(false)` directly. Switching it off closes the picker,
+    stops discovery and swaps an active feed for USB. iOS (`!HAS_USB`):
+    always on, no checkbox.
   - Startup: `connectUsb(silent)` (Android), then `rescan()` (mDNS).
     The plugin's `attached` event → `connectUsb`, which replaces a
     broker feed (USB wins). USB unplug / broker lost → `onDisconnect` →
@@ -462,7 +470,8 @@ Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
     connect).
   - The button stays a colour LED (no text); the source ("USB 921600",
     "MQTT <broker>") goes into its title/aria-label and a toast.
-    Tap connected → disconnect; tap idle → picker.
+    Tap connected → disconnect; tap idle → picker (USB directly while
+    `mqttEnabled` is off).
   - `@capacitor/app` `appStateChange`: on background, end the broker
     feed and stop mDNS (iOS kills sockets anyway); on resume `rescan()`,
     and the remembered broker reconnects. USB untouched. Geolocation uses `@capacitor/geolocation`'s

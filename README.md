@@ -275,12 +275,16 @@ documented API, and may change.
 ## Android / iOS app
 
 `app/` is a Capacitor-wrapped app for Android and iOS. On Android it
-prefers a USB serial device; with none plugged in - and always on iOS,
-which has no USB serial - it finds MQTT brokers via mDNS
-(`_mqtt-ws._tcp`) and subscribes to the [`ihex` raw-frame topic](#mqtt-broker-feed).
-The first time, a picker lists the brokers found; the chosen one is
-remembered and reconnected silently from then on (tap the status dot to
-disconnect, tap again to choose). Plugging in a USB device switches to it;
+connects to a USB serial device: tap the status dot, or just plug the
+device in. Sensorpod users can additionally switch on **MQTT broker
+feed** under **Advanced** at the bottom of the layer switcher (off by
+default, remembered). With it on, the app finds MQTT brokers via mDNS
+(`_mqtt-ws._tcp`) and subscribes to the [`ihex` raw-frame topic](#mqtt-broker-feed)
+whenever no USB device is plugged in. On iOS, which has no USB serial,
+the broker feed is the only source and always on. The first time, a
+picker lists the brokers found; the chosen one is remembered and
+reconnected silently from then on (tap the status dot to disconnect,
+tap again to choose). Plugging in a USB device switches to it;
 unplugging falls back to the broker.
 
 The Android side exists for when WebUSB doesn't work
