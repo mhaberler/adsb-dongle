@@ -135,8 +135,9 @@ bun run rollback    # restore the previous deploy (/apps/adsb.prev)
 **PWA / hosting**: `base: "./"` (relative), so the same build runs on
 the Hetzner vhost `adsb.wetterheidi.de` (`/apps/adsb`, nginx + certbot,
 Pförtner login gate by default — `PFOERTNER` in the deploy script),
-under `bun run preview`, or any subpath. GitHub Pages deploy was
-removed. `vite.config.ts` `serviceWorker()` writes `dist/sw.js` after
+under `bun run preview`, or any subpath. Also deployed to GitHub Pages by
+`.github/workflows/webapp-pages.yml` (push to `master` touching
+`webapp/**`, or manual dispatch). `vite.config.ts` `serviceWorker()` writes `dist/sw.js` after
 the build from `src/sw-template.js` (plain JS, not bundled): precaches
 every dist file, cache name `adsb-<hash over template + files>`,
 cache-first for same-origin GETs (`ignoreVary` — the crossorigin module
