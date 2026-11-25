@@ -191,7 +191,7 @@ device picker lists it directly. Tested with a generic R820T stick.
 
 The demodulator is a port of readsb's 2.4 Msps one (`demod_2400.c`):
 in an interleaved A/B on the same stick it decoded about 40 % more
-frames than the simpler 2 Msps demodulator it replaced. Unlike readsb it
+frames than the simpler 2 Msps (mayhem-mobile) demodulator it replaced. Unlike readsb it
 does no bit-error correction and decodes DF17/18 only.
 
 ### Aircraft display

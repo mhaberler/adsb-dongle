@@ -38,7 +38,7 @@ describe("ModeSDemod2400", () => {
   });
 
   test("weak frames near the noise", () => {
-    // amplitude 8 counts over ±2 noise: the 2 Msps demod needs far more
+    // amplitude 8 counts over ±2 noise
     expect(run(synthIq2400(FRAMES.map((hex) => ({ hex, amp: 8 })), 400, 1)).map(hexOf)).toEqual(FRAMES);
   });
 

@@ -19,7 +19,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import java.util.List;
 
 /**
- * SDR link on Android (ADR 0002): the WebView has no WebUSB and IQ at 2 Msps is too much for the bridge, so the
+ * SDR link on Android (ADR 0002): the WebView has no WebUSB and IQ at 2.4 Msps is too much for the bridge, so the
  * RTL-SDR is driven and demodulated here and only Raw frames reach JS.
  *
  * Methods: list() → {devices: [{deviceId, name}]}; start() → {label} once streaming (asks for USB permission
@@ -123,8 +123,7 @@ public class RtlSdrPlugin extends Plugin {
         Thread t = new Thread(() -> {
             UsbDeviceConnection conn = usb.openDevice(d);
             if (conn == null) { call.reject("Cannot open RTL-SDR"); return; }
-            // readsb's 2.4 Msps demodulator: ~40 % more frames than the 2 Msps one in an interleaved A/B.
-            RtlSdrDriver drv = new RtlSdrDriver(d, conn, RtlSdrDriver.SAMPLE_RATE_2400_HZ);
+            RtlSdrDriver drv = new RtlSdrDriver(d, conn);
             try {
                 drv.open();
             } catch (Exception e) {

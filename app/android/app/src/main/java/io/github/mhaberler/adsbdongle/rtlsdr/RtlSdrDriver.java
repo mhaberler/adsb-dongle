@@ -15,7 +15,7 @@ import java.util.concurrent.TimeoutException;
 
 /**
  * RTL-SDR for an SDR link: RTL2832U + R820T/R820T2, R828D (Blog V4) or R828S (Blog V4L), fixed on 1090 MHz at
- * 2 Msps with fixed gain, streaming raw offset-binary IQ. Java twin of webapp/src/rtlsdr.ts — keep both in sync.
+ * 2.4 Msps with fixed gain, streaming raw offset-binary IQ. Java twin of webapp/src/rtlsdr.ts — keep both in sync.
  *
  * Trimmed port of mayhem-mobile's usb/RtlSdr.kt (GPL-3.0), itself from librtlsdr (librtlsdr.c, tuner_r82xx.c,
  * GPL-2.0-or-later). The details that each cost someone a day: vendor request 0 both ways, block in index,
@@ -41,8 +41,8 @@ public final class RtlSdrDriver {
     }
 
     static final long ADSB_FREQ_HZ = 1_090_000_000L;
-    static final int SAMPLE_RATE_HZ = 2_000_000;
-    static final int SAMPLE_RATE_2400_HZ = 2_400_000;
+    /** readsb's demod_2400 rate (ModeSDemod2400). */
+    static final int SAMPLE_RATE_HZ = 2_400_000;
     static final int GAIN_TENTH_DB = 488;
 
     private static final int DEMODB = 0, USBB = 1, SYSB = 2, IICB = 6;
@@ -86,12 +86,10 @@ public final class RtlSdrDriver {
     private String label = "RTL-SDR";
     private int ctlFails = 0;
     private volatile boolean stop = false;
-    private final int rate;
 
-    public RtlSdrDriver(UsbDevice device, UsbDeviceConnection conn, int rate) {
+    public RtlSdrDriver(UsbDevice device, UsbDeviceConnection conn) {
         this.device = device;
         this.conn = conn;
-        this.rate = rate;
     }
 
     public String label() { return label; }
@@ -110,14 +108,14 @@ public final class RtlSdrDriver {
         clearHalt();
         initBaseband();
         initTuner();
-        setSampleRate(rate);
+        setSampleRate(SAMPLE_RATE_HZ);
         setI2cRepeater(true);
         r82xxSetFreq(ADSB_FREQ_HZ);
         applyGain(GAIN_TENTH_DB);
         setI2cRepeater(false);
         resetBuffer();
         if (ctlFails > 0) Log.w(TAG, ctlFails + " control transfers refused during bring-up");
-        Log.i(TAG, label + ": streaming 1090 MHz @ " + rate / 1e6 + " Msps");
+        Log.i(TAG, label + ": streaming 1090 MHz @ " + SAMPLE_RATE_HZ / 1e6 + " Msps");
     }
 
     /** Stream until stop() or the stick is gone; returns why it ended. Reads kept in flight via UsbRequest. */

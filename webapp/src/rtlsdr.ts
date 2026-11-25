@@ -1,6 +1,6 @@
 // RTL-SDR over WebUSB for an SDR link: an RTL2832U with a Rafael Micro
 // R820T/R820T2, R828D (RTL-SDR Blog V4) or R828S (Blog V4L) tuner, brought up
-// fixed on 1090 MHz at 2 Msps with fixed gain, streaming raw offset-binary IQ.
+// fixed on 1090 MHz at 2.4 Msps with fixed gain, streaming raw offset-binary IQ.
 //
 // Trimmed port of mayhem-mobile's `web/src/rtlsdr.ts` (GPL-3.0), itself a port
 // of librtlsdr's `librtlsdr.c` and `tuner_r82xx.c` (GPL-2.0-or-later). Cut:
@@ -36,8 +36,8 @@ export function isRtlSdr(d: USBDevice): boolean {
 }
 
 export const ADSB_FREQ_HZ = 1_090_000_000;
-/** Default sample rate; the 2.4 Msps demodulator asks for 2_400_000. */
-export const SAMPLE_RATE_HZ = 2_000_000;
+/** readsb's demod_2400 rate (modes-demod-2400.ts). */
+export const SAMPLE_RATE_HZ = 2_400_000;
 /** Tuner gain in tenths of a dB: the most the R82xx stages add up to. */
 export const GAIN_TENTH_DB = 488;
 
@@ -175,15 +175,7 @@ export class RtlSdr {
   private readonly onIq: (buf: Uint8Array) => void;
   private readonly log: (line: string) => void;
 
-  private readonly rate: number;
-
-  constructor(
-    dev: USBDevice,
-    onIq: (buf: Uint8Array) => void,
-    log: (line: string) => void = (l) => console.info(l),
-    rate = SAMPLE_RATE_HZ,
-  ) {
-    this.rate = rate;
+  constructor(dev: USBDevice, onIq: (buf: Uint8Array) => void, log: (line: string) => void = (l) => console.info(l)) {
     this.dev = dev;
     this.onIq = onIq;
     this.log = log;
@@ -228,14 +220,14 @@ export class RtlSdr {
     try { await this.dev.clearHalt("in", this.epIn); } catch { /* nothing stalled */ }
     await this.initBaseband();
     await this.initTuner();
-    await this.setSampleRate(this.rate);
+    await this.setSampleRate(SAMPLE_RATE_HZ);
     await this.setI2cRepeater(true);
     await this.r82xxSetFreq(ADSB_FREQ_HZ);
     await this.applyGain(GAIN_TENTH_DB);
     await this.setI2cRepeater(false);
     await this.resetBuffer();
     if (this.ctlFails) this.log(`RTL-SDR: ${this.ctlFails} control transfers refused during bring-up`);
-    this.log(`${this.label}: streaming 1090 MHz @ ${this.rate / 1e6} Msps`);
+    this.log(`${this.label}: streaming 1090 MHz @ ${SAMPLE_RATE_HZ / 1e6} Msps`);
   }
 
   /** Eight 64 KB reads in flight so the stick never waits on us. Resolves with why it stopped. */
