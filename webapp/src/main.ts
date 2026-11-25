@@ -9,6 +9,8 @@ import { AircraftMap } from "./map";
 import { AircraftStore } from "./aircraft-store";
 import { MqttFeed, RAW_FRAME_TOPIC, isMixedContent } from "./mqtt-feed";
 import { advancedSection } from "./advanced";
+import { SdrLink } from "./sdr-link";
+import { RTLSDR_FILTERS, isRtlSdr } from "./rtlsdr";
 
 const connectBtn = document.querySelector<HTMLButtonElement>("#connect-btn")!;
 const statusMsg = document.querySelector<HTMLDivElement>("#status-msg")!;
@@ -31,6 +33,7 @@ function toast(msg: string, ms = 4000): void {
 const map = new AircraftMap("map");
 const lineReader = new LineReader();
 const mqttFeed = new MqttFeed();
+const sdrLink = new SdrLink();
 
 // MQTT broker feed (sensorpod): an expert option, so it lives collapsed in
 // the layer switcher's "Advanced" section instead of the toolbar.
@@ -52,8 +55,21 @@ try {
   // storage unavailable: keep the default
 }
 
-// Exactly one input source at a time: a serial link or a broker feed.
-type Source = "none" | "serial" | "mqtt";
+// SDR link (RTL-SDR stick over WebUSB). On desktop the dot opens the Web
+// Serial picker, so the stick is picked here once; afterwards it
+// auto-connects like a serial device. On Android Chrome the dot's WebUSB
+// picker lists it too.
+const sdrBox = document.createElement("div");
+sdrBox.innerHTML =
+  `<div>RTL-SDR</div>` +
+  `<div class="adv-hint">An RTL-SDR stick on 1090 MHz, demodulated in the browser.</div>` +
+  `<div class="adv-row"><button type="button">Connect</button></div>`;
+const sdrBtn = sdrBox.querySelector("button")!;
+if (navigator.usb) mqttBox.append(sdrBox);
+
+// Exactly one input source at a time: a serial link, an SDR link or a
+// broker feed.
+type Source = "none" | "serial" | "sdr" | "mqtt";
 let source: Source = "none";
 
 // Baud probe order favors the direct-wired module's 921600 on the WebUSB
@@ -66,13 +82,14 @@ const USB_FILTERS: USBDeviceFilter[] = [
   { vendorId: 0x0403 }, // FTDI
   { classCode: 0x02 }, // CDC comm interface
   { classCode: 0xef }, // composite/IAD (covers most CDC-ACM boards)
+  ...RTLSDR_FILTERS,
 ];
 
 function usbTransport(device: USBDevice): ByteTransport {
   return FtdiTransport.matches(device) ? new FtdiTransport(device) : new CdcAcmTransport(device);
 }
 
-type Pick = { transport: ByteTransport; probeOrder: number[] };
+type Pick = { transport: ByteTransport; probeOrder: number[] } | { sdr: USBDevice };
 
 // Web Serial (navigator.serial) is desktop-only - Android Chrome has no
 // such API at all, so there we fall back to WebUSB with hand-rolled
@@ -82,13 +99,17 @@ type Pick = { transport: ByteTransport; probeOrder: number[] };
 async function findTransport(ask: boolean): Promise<Pick | null> {
   if (navigator.serial) {
     const transport = ask ? await requestWebSerialTransport() : await grantedWebSerialTransport();
-    return transport && { transport, probeOrder: SERIAL_PROBE };
+    if (transport) return { transport, probeOrder: SERIAL_PROBE };
+    // An RTL-SDR stick picked earlier (Advanced section) auto-connects too.
+    const stick = !ask && (await navigator.usb?.getDevices())?.find(isRtlSdr);
+    return stick ? { sdr: stick } : null;
   }
   if (navigator.usb) {
     const device = ask
       ? await navigator.usb.requestDevice({ filters: USB_FILTERS })
       : (await navigator.usb.getDevices())[0];
-    return device ? { transport: usbTransport(device), probeOrder: USB_PROBE } : null;
+    if (!device) return null;
+    return isRtlSdr(device) ? { sdr: device } : { transport: usbTransport(device), probeOrder: USB_PROBE };
   }
   if (ask) throw new Error("No Web Serial or WebUSB in this browser - use Chrome or Edge");
   return null;
@@ -150,11 +171,13 @@ function setState(state: ConnState): void {
 function setSource(next: Source): void {
   source = next;
   setState(next === "none" ? "disconnected" : "connected");
-  if (next === "mqtt") {
-    connectBtn.title = `MQTT ${RAW_FRAME_TOPIC} - tap to disconnect`;
+  if (next === "mqtt" || next === "sdr") {
+    const what = next === "mqtt" ? `MQTT ${RAW_FRAME_TOPIC}` : sdrLink.label;
+    connectBtn.title = `${what} - tap to disconnect`;
     connectBtn.setAttribute("aria-label", connectBtn.title);
   }
   mqttBtn.textContent = next === "mqtt" ? "Disconnect" : "Connect";
+  sdrBtn.textContent = next === "sdr" ? "Disconnect" : "Connect";
 }
 
 // Used only during baud auto-probe: a line is "valid" if it's a recognized
@@ -251,12 +274,23 @@ function onDisconnect(): void {
 
 async function disconnectSource(): Promise<void> {
   if (source === "serial") await lineReader.disconnect();
+  else if (source === "sdr") await sdrLink.disconnect();
   else if (source === "mqtt") mqttFeed.disconnect();
   if (source !== "none") onDisconnect();
 }
 
-// Serial link (Web Serial / WebUSB). Never replaces an active broker feed
-// on its own - only a click does.
+async function connectSdr(device: USBDevice): Promise<void> {
+  await sdrLink.connect(device, handleLine, (reason) => {
+    onDisconnect();
+    setState("error");
+    toast(reason);
+  });
+  setSource("sdr");
+  toast(sdrLink.label, 2500);
+}
+
+// Serial or SDR link (Web Serial / WebUSB). Never replaces an active broker
+// feed on its own - only a click does.
 async function connect(ask: boolean): Promise<void> {
   if (connecting || source !== "none") return;
   connecting = true;
@@ -266,6 +300,10 @@ async function connect(ask: boolean): Promise<void> {
     const pick = await findTransport(ask);
     if (!pick) {
       setState("disconnected");
+      return;
+    }
+    if ("sdr" in pick) {
+      await connectSdr(pick.sdr);
       return;
     }
     await lineReader.connect(pick.transport, pick.probeOrder, isRecognizedLine, handleLine, onDisconnect);
@@ -323,6 +361,32 @@ mqttBtn.addEventListener("click", async () => {
     });
     setSource("mqtt");
     toast(`MQTT ${RAW_FRAME_TOPIC}`, 2500);
+  } catch (err) {
+    setState("error");
+    toast((err as Error).message);
+  } finally {
+    connecting = false;
+  }
+});
+
+sdrBtn.addEventListener("click", async () => {
+  if (source === "sdr") {
+    await disconnectSource();
+    return;
+  }
+  if (connecting) return;
+  let device: USBDevice;
+  try {
+    device = await navigator.usb.requestDevice({ filters: RTLSDR_FILTERS });
+  } catch {
+    return; // picker closed
+  }
+  connecting = true;
+  setState("connecting");
+  try {
+    await disconnectSource();
+    resetState();
+    await connectSdr(device);
   } catch (err) {
     setState("error");
     toast((err as Error).message);
