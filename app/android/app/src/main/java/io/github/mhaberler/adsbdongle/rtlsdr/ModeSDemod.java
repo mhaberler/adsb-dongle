@@ -100,7 +100,7 @@ public final class ModeSDemod {
         return true;
     }
 
-    private static int checksum(int[] msg) {
+    static int checksum(int[] msg) {
         int crc = 0;
         for (int j = 0; j < 88; j++) if ((msg[j >> 3] & (0x80 >> (j & 7))) != 0) crc ^= CRC_TABLE[j];
         return crc;

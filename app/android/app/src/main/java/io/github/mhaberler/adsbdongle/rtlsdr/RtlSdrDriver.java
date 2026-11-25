@@ -42,6 +42,7 @@ public final class RtlSdrDriver {
 
     static final long ADSB_FREQ_HZ = 1_090_000_000L;
     static final int SAMPLE_RATE_HZ = 2_000_000;
+    static final int SAMPLE_RATE_2400_HZ = 2_400_000;
     static final int GAIN_TENTH_DB = 488;
 
     private static final int DEMODB = 0, USBB = 1, SYSB = 2, IICB = 6;
@@ -85,10 +86,12 @@ public final class RtlSdrDriver {
     private String label = "RTL-SDR";
     private int ctlFails = 0;
     private volatile boolean stop = false;
+    private final int rate;
 
-    public RtlSdrDriver(UsbDevice device, UsbDeviceConnection conn) {
+    public RtlSdrDriver(UsbDevice device, UsbDeviceConnection conn, int rate) {
         this.device = device;
         this.conn = conn;
+        this.rate = rate;
     }
 
     public String label() { return label; }
@@ -107,14 +110,14 @@ public final class RtlSdrDriver {
         clearHalt();
         initBaseband();
         initTuner();
-        setSampleRate(SAMPLE_RATE_HZ);
+        setSampleRate(rate);
         setI2cRepeater(true);
         r82xxSetFreq(ADSB_FREQ_HZ);
         applyGain(GAIN_TENTH_DB);
         setI2cRepeater(false);
         resetBuffer();
         if (ctlFails > 0) Log.w(TAG, ctlFails + " control transfers refused during bring-up");
-        Log.i(TAG, label + ": streaming 1090 MHz @ 2 Msps");
+        Log.i(TAG, label + ": streaming 1090 MHz @ " + rate / 1e6 + " Msps");
     }
 
     /** Stream until stop() or the stick is gone; returns why it ended. Reads kept in flight via UsbRequest. */
