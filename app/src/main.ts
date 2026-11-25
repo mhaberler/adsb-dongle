@@ -5,6 +5,7 @@ import { Geolocation } from "@capacitor/geolocation";
 import { UsbSerial } from "@leeskies/capacitor-usb-serial";
 import { LineReader } from "../../webapp/src/transport";
 import { requestNativeTransport } from "./transport-native";
+import { RtlSdr, rtlSdrPresent } from "./rtlsdr-native";
 import { classifyLine, parseLine, parseRawFrame, parseRawSignal } from "../../webapp/src/protocol";
 import type { StatsMessage } from "../../webapp/src/protocol";
 import { AircraftMap } from "../../webapp/src/map";
@@ -55,7 +56,8 @@ let connecting = false;
 // Exactly one input source at a time. USB wins over a broker feed: plugging
 // a device in replaces the feed, unplugging falls back to the remembered
 // broker.
-type Source = "none" | "usb" | "mqtt";
+// "usb" = Serial link, "sdr" = SDR link (RTL-SDR stick).
+type Source = "none" | "usb" | "sdr" | "mqtt";
 let source: Source = "none";
 // Set by tapping to disconnect: suppresses auto-connect (startup excepted,
 // device plug-in excepted) until the next tap.
@@ -69,6 +71,7 @@ const REMEMBERED_WAIT_MS = 5000;
 let scanStartedAt = 0;
 let autoPickerShown = false;
 let usbPresent = false;
+let sdrPresent = false;
 
 // MQTT broker feed (sensorpod) is an expert option on Android: off by
 // default, switched on under "Advanced" in the layer switcher. While off
@@ -273,12 +276,57 @@ function onDisconnect(): void {
 
 async function disconnectSource(): Promise<void> {
   if (source === "usb") await lineReader.disconnect();
+  else if (source === "sdr") await RtlSdr.stop();
   else if (source === "mqtt") mqttFeed.disconnect();
   onDisconnect();
 }
 
+// SDR link: the native plugin brings the stick up on 1090 MHz and emits
+// Raw frames, which take the same path as a Serial link's lines.
+async function connectSdr(silent: boolean): Promise<void> {
+  if (!HAS_USB || connecting || source === "sdr") return;
+  connecting = true;
+  const prev = connState;
+  setState("connecting");
+  try {
+    const { label } = await RtlSdr.start();
+    if (source === "usb") await lineReader.disconnect();
+    if (source === "mqtt") mqttFeed.disconnect();
+    source = "none";
+    resetState();
+    manualOff = false;
+    setSource("sdr", label);
+  } catch (err) {
+    if (silent) {
+      setState(source === "none" ? "disconnected" : prev);
+    } else {
+      setState("error");
+      toast((err as Error).message);
+    }
+  } finally {
+    connecting = false;
+  }
+}
+
+if (HAS_USB) {
+  void RtlSdr.addListener("frames", ({ lines }) => {
+    if (source !== "sdr") return;
+    for (const line of lines) handleLine(line);
+  });
+  void RtlSdr.addListener("stopped", ({ reason }) => {
+    if (source !== "sdr") return;
+    toast(reason);
+    onDisconnect();
+  });
+}
+
 async function connectUsb(silent: boolean): Promise<void> {
-  if (!HAS_USB || connecting || source === "usb") return;
+  if (!HAS_USB || connecting || source === "usb" || source === "sdr") return;
+  // An RTL-SDR stick means an SDR link, anything else a Serial link.
+  if (await rtlSdrPresent()) {
+    await connectSdr(silent);
+    return;
+  }
   connecting = true;
   const prev = connState;
   setState("connecting");
@@ -350,6 +398,9 @@ function autoSelect(): void {
 
 function pickerItems(): PickerItem[] {
   const items: PickerItem[] = [];
+  if (sdrPresent) {
+    items.push({ label: "RTL-SDR", detail: "1090 MHz", pick: () => void connectSdr(false) });
+  }
   if (usbPresent) {
     items.push({ label: "USB serial", detail: `${BAUD} baud`, pick: () => void connectUsb(false) });
   }
@@ -364,6 +415,7 @@ async function openPicker(): Promise<void> {
     usbPresent = await UsbSerial.listDevices()
       .then(({ devices }) => devices.length > 0)
       .catch(() => false);
+    sdrPresent = await rtlSdrPresent();
   }
   picker.open(pickerItems());
 }
@@ -420,6 +472,7 @@ void App.addListener("appStateChange", ({ isActive }) => {
 async function start(): Promise<void> {
   if (HAS_USB) {
     void UsbSerial.addListener("attached", () => void connectUsb(true));
+    void RtlSdr.addListener("attached", () => void connectUsb(true));
     await connectUsb(true);
   }
   await rescan();
