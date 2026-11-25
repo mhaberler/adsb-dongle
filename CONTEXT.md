@@ -7,12 +7,16 @@ Receives ADS-B extended-squitter traffic from a Mode-S receiver module and shows
 ### Input
 
 **Input source**:
-Where the viewer's lines come from; exactly one is active at a time. Either a Serial link or a Broker feed.
+Where the viewer's lines come from; exactly one is active at a time. Either a Serial link, an SDR link or a Broker feed.
 _Avoid_: transport, connection, feed (alone)
 
 **Serial link**:
 An Input source over USB: the receiver module wired via a USB-UART adapter, or this repo's ESP32 dongle.
 _Avoid_: USB connection, port
+
+**SDR link**:
+An Input source over USB: an RTL-SDR stick whose IQ samples the viewer demodulates into Raw frames itself, fixed on 1090 MHz.
+_Avoid_: SDR connection, RTL-SDR source, Serial link (it carries samples, not lines)
 
 **Broker feed**:
 An Input source that subscribes to Raw frames on a Broker's `ihex` topic.
@@ -29,7 +33,7 @@ _Avoid_: default broker, preferred broker
 ### Data
 
 **Raw frame**:
-One demodulated Mode-S message as ASCII hex: `*<hex>;` as emitted by the receiver module, or `+SS<hex>;` with a Signal level byte in front (a sensorpod's RTL-SDR frames). Same unit on a Serial link and on the `ihex` topic.
+One demodulated Mode-S message as ASCII hex: `*<hex>;` as emitted by the receiver module, or `+SS<hex>;` with a Signal level byte in front (a sensorpod's RTL-SDR frames, or an SDR link's). Same unit on a Serial link, an SDR link and the `ihex` topic.
 _Avoid_: ihex line, hex frame, message
 
 **Signal level**:

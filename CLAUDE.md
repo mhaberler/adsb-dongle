@@ -277,6 +277,27 @@ direct-wired module, not the dongle).
   20/21) traffic the module emits by default — harmless no-op if the
   stream is actually coming through an ESP32 pass-through. Not sent on a
   broker feed.
+- **SDR link** (RTL-SDR stick, ADR 0002): `rtlsdr.ts` (`RtlSdr`) is a
+  trimmed port of mayhem-mobile's WebUSB RTL2832U + R82xx driver
+  (librtlsdr lineage, GPL): fixed 1090 MHz, 2 Msps, gain 48.8 dB, no
+  retune/HF/AGC/PPM/bias tee; R820T/R820T2, R828D (Blog V4, 16 vs 28.8 MHz
+  PLL reference picked by lock), R828S (Blog V4L, by USB strings).
+  Streams raw offset-binary IQ (8 × 64 KB `transferIn` in flight).
+  `modes-demod.ts` (`ModeSDemod`): demod half of mayhem's
+  `dsp/adsb.ts` (dump1090 preamble test + PPM slicing, no bit errors,
+  DF17/18, CRC via `modes.ts` `modeSChecksum`) → `+SS<hex>;` lines,
+  `SS` = 255 · mean preamble-pulse amplitude / full scale. Runs in
+  `sdr-worker.ts`; `sdr-link.ts` (`SdrLink`) glues driver → worker →
+  `handleLine`. `main.ts`: `source` `"sdr"`; desktop connects via a
+  "RTL-SDR" button in the Advanced section (`requestDevice` with
+  `RTLSDR_FILTERS`), granted sticks auto-connect after granted Web Serial
+  ports; on the WebUSB path (Android Chrome) `USB_FILTERS` include the
+  RTL ids and `isRtlSdr` routes the pick. Tests: `modes-demod.test.ts`
+  (synthetic PPM IQ from `fixtures/synth-iq.ts`; the fixture
+  `fixtures/adsb-2msps.{u8,txt}` is shared with the app's JUnit test -
+  regenerate with `bun src/fixtures/synth-iq.ts`), `rtlsdr.test.ts`
+  (PLL/gain/FIR math). Excluded from the app's `tsconfig.json` (WebUSB
+  types), like the other WebUSB drivers.
 - **`mqtt-feed.ts`** (`MqttFeed`): broker feed — subscribes to the
   sensorpod's `ihex` topic (`RAW_FRAME_TOPIC`, one `*<hex>;` raw frame per
   message) over MQTT-over-WebSocket and passes each payload to the same
@@ -508,7 +529,21 @@ Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
   `MainActivity` so plugging in a matching device offers to launch the
   app with permission pre-granted.
 - **`res/xml/device_filter.xml`**: vendor-ID filter for auto-launch —
-  decimal `1027` (0x0403, FTDI) and `12346` (0x303A, Espressif/ESP32-C6).
+  decimal `1027` (0x0403, FTDI), `12346` (0x303A, Espressif/ESP32-C6) and
+  `3034` (0x0BDA, Realtek RTL-SDR).
+- **SDR link** (`android/app/src/main/java/io/github/mhaberler/adsbdongle/rtlsdr/`,
+  ADR 0002): local Capacitor plugin `RtlSdr`, in Java (the app module has
+  no Kotlin), registered in `MainActivity`. `RtlSdrDriver.java` and
+  `ModeSDemod.java` are line-for-line twins of `webapp/src/rtlsdr.ts` and
+  `modes-demod.ts` - keep them in sync; `ModeSDemodTest` (JUnit,
+  `./gradlew :app:testDebugUnitTest`) checks the shared fixture and the
+  tuner math. Streams with a `UsbRequest` pool (8 × 64 KB, 12 × 16 KB
+  before API 28), stops after 2 s without samples. Plugin: `list()`,
+  `start()` (asks USB permission, resolves `{label}` once streaming),
+  `stop()`; events `frames` `{lines}` (per USB buffer with frames),
+  `stopped` `{reason}`, `attached`/`detached`. `app/src/rtlsdr-native.ts`
+  wraps it; `main.ts` `connectUsb` checks `rtlSdrPresent()` first and
+  goes to `connectSdr` (`source` `"sdr"`), the picker lists "RTL-SDR".
 - **`android/build.gradle`**: adds the **JitPack** Maven repo
   (`https://jitpack.io`) at the `allprojects` level — required because
   `mik3y/usb-serial-for-android` (the plugin's underlying dependency) is

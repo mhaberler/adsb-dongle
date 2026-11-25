@@ -161,6 +161,27 @@ webapp over http (`bun dev` or `bun run preview`).
 
 *Directly decoding hex messages in-browser*
 
+### RTL-SDR stick
+
+A plain RTL-SDR USB stick (RTL2832U with an R820T/R820T2 tuner, RTL-SDR
+Blog V4/V4L) also works as a receiver: the browser drives it over WebUSB
+on 1090 MHz at 2 Msps with fixed maximum gain and demodulates the samples
+itself, in a Web Worker, into the same raw frames (with signal level, so
+RSSI works too). Open the layer switcher, expand **Advanced** and click
+**Connect** under **RTL-SDR**; once picked, the stick auto-connects on
+later visits and when plugged in. On Android Chrome the colour dot's
+device picker lists it directly. Tested with a generic R820T stick.
+
+- **macOS**: works as is.
+- **Linux**: the kernel's DVB driver grabs the stick - blacklist it
+  (`echo blacklist dvb_usb_rtl28xxu | sudo tee /etc/modprobe.d/rtlsdr.conf`,
+  replug) and allow access with a udev rule (as for `rtl_sdr`).
+- **Windows**: install the WinUSB driver for the stick with
+  [Zadig](https://zadig.akeo.ie/).
+
+The demodulator is a simple one (dump1090 lineage, no bit-error
+correction), so expect less range than readsb on the same stick.
+
 ### Aircraft display
 
 Each aircraft is a symbol pointing along its track, coloured by altitude
@@ -280,7 +301,9 @@ device in. Sensorpod users can additionally switch on **MQTT broker
 feed** under **Advanced** at the bottom of the layer switcher (off by
 default, remembered). With it on, the app finds MQTT brokers via mDNS
 (`_mqtt-ws._tcp`) and subscribes to the [`ihex` raw-frame topic](#mqtt-broker-feed)
-whenever no USB device is plugged in. On iOS, which has no USB serial,
+whenever no USB device is plugged in. An RTL-SDR stick works too, through
+a small native plugin in the app that demodulates on the phone (see
+[RTL-SDR stick](#rtl-sdr-stick)). On iOS, which has no USB serial,
 the broker feed is the only source and always on. The first time, a
 picker lists the brokers found; the chosen one is remembered and
 reconnected silently from then on (tap the status dot to disconnect,
@@ -314,6 +337,7 @@ app — preload the area before going out of coverage.
 | Display name        | ADS-B Dongle                                                      |
 | Min Android version | 8.0 (API 24)                                                      |
 | Signing             | debug-signed only (no Play Store release)                         |
+| USB devices         | FTDI adapter, ESP32 dongle, RTL-SDR stick (auto-launch on plug-in) |
 | Permissions         | USB host, coarse/fine location (for the "my location" map marker), Wi-Fi multicast (mDNS broker discovery) |
 | iOS                 | broker feed only; Local Network permission for mDNS                |
 
