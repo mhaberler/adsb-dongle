@@ -175,7 +175,7 @@ webapp over http (`bun dev` or `bun run preview`).
 
 A plain RTL-SDR USB stick (RTL2832U with an R820T/R820T2 tuner, RTL-SDR
 Blog V4/V4L) also works as a receiver: the browser drives it over WebUSB
-on 1090 MHz at 2 Msps with fixed maximum gain and demodulates the samples
+on 1090 MHz at 2.4 Msps with fixed maximum gain and demodulates the samples
 itself, in a Web Worker, into the same raw frames (with signal level, so
 RSSI works too). Open the layer switcher, expand **Advanced** and click
 **Connect** under **RTL-SDR**; once picked, the stick auto-connects on
@@ -189,8 +189,10 @@ device picker lists it directly. Tested with a generic R820T stick.
 - **Windows**: install the WinUSB driver for the stick with
   [Zadig](https://zadig.akeo.ie/).
 
-The demodulator is a simple one (dump1090 lineage, no bit-error
-correction), so expect less range than readsb on the same stick.
+The demodulator is a port of readsb's 2.4 Msps one (`demod_2400.c`):
+in an interleaved A/B on the same stick it decoded about 40 % more
+frames than the simpler 2 Msps (mayhem-mobile) demodulator it replaced. Unlike readsb it
+does no bit-error correction and decodes DF17/18 only.
 
 ### Aircraft display
 

@@ -279,22 +279,27 @@ direct-wired module, not the dongle).
   broker feed.
 - **SDR link** (RTL-SDR stick, ADR 0002): `rtlsdr.ts` (`RtlSdr`) is a
   trimmed port of mayhem-mobile's WebUSB RTL2832U + R82xx driver
-  (librtlsdr lineage, GPL): fixed 1090 MHz, 2 Msps, gain 48.8 dB, no
+  (librtlsdr lineage, GPL): fixed 1090 MHz, 2.4 Msps, gain 48.8 dB, no
   retune/HF/AGC/PPM/bias tee; R820T/R820T2, R828D (Blog V4, 16 vs 28.8 MHz
   PLL reference picked by lock), R828S (Blog V4L, by USB strings).
   Streams raw offset-binary IQ (8 × 64 KB `transferIn` in flight).
-  `modes-demod.ts` (`ModeSDemod`): demod half of mayhem's
-  `dsp/adsb.ts` (dump1090 preamble test + PPM slicing, no bit errors,
-  DF17/18, CRC via `modes.ts` `modeSChecksum`) → `+SS<hex>;` lines,
-  `SS` = 255 · mean preamble-pulse amplitude / full scale. Runs in
-  `sdr-worker.ts`; `sdr-link.ts` (`SdrLink`) glues driver → worker →
+  `modes-demod-2400.ts` (`ModeSDemod2400`): port of readsb's
+  `demod_2400.c` (wiedehopf/readsb) - preamble correlation over five
+  sub-sample phases, phase-weighted slicing, threshold 58, first CRC-good
+  DF17/18 phase wins (no bit/DF repair); `SS` = 255·√(mean power over the
+  message), readsb's Beast scale (`signalLen` is integer 268, as readsb).
+  Replaced mayhem's simpler 2 Msps demod (dump1090 preamble test + PPM
+  slicing): ~40 % more frames in an interleaved live A/B (8 × 20 s each,
+  same stick). CRC via `modes.ts` `modeSChecksum`. Output `+SS<hex>;`.
+  `modes-demod-2400.test.ts` synthesizes 2.4 Msps IQ on a 12 MHz grid
+  (`synthIq2400`) at every sub-sample phase. Runs in `sdr-worker.ts`; `sdr-link.ts` (`SdrLink`) glues driver → worker →
   `handleLine`. `main.ts`: `source` `"sdr"`; desktop connects via a
   "RTL-SDR" button in the Advanced section (`requestDevice` with
   `RTLSDR_FILTERS`), granted sticks auto-connect after granted Web Serial
   ports; on the WebUSB path (Android Chrome) `USB_FILTERS` include the
   RTL ids and `isRtlSdr` routes the pick. Tests: `modes-demod.test.ts`
-  (synthetic PPM IQ from `fixtures/synth-iq.ts`; the fixture
-  `fixtures/adsb-2msps.{u8,txt}` is shared with the app's JUnit test -
+  (the fixture `fixtures/adsb-2400.{u8,txt}` from `fixtures/synth-iq.ts`
+  is shared with the app's JUnit tests -
   regenerate with `bun src/fixtures/synth-iq.ts`), `rtlsdr.test.ts`
   (PLL/gain/FIR math). Excluded from the app's `tsconfig.json` (WebUSB
   types), like the other WebUSB drivers.
@@ -534,10 +539,10 @@ Always use `bun`/`bunx`, never `npm`/`npx`, for anything in this repo.
 - **SDR link** (`android/app/src/main/java/io/github/mhaberler/adsbdongle/rtlsdr/`,
   ADR 0002): local Capacitor plugin `RtlSdr`, in Java (the app module has
   no Kotlin), registered in `MainActivity`. `RtlSdrDriver.java` and
-  `ModeSDemod.java` are line-for-line twins of `webapp/src/rtlsdr.ts` and
-  `modes-demod.ts` - keep them in sync; `ModeSDemodTest` (JUnit,
-  `./gradlew :app:testDebugUnitTest`) checks the shared fixture and the
-  tuner math. Streams with a `UsbRequest` pool (8 × 64 KB, 12 × 16 KB
+  `ModeSDemod2400.java` are line-for-line twins of `webapp/src/rtlsdr.ts`
+  and `modes-demod-2400.ts` - keep them in sync; `ModeSDemod2400Test` and
+  `RtlSdrDriverTest` (JUnit, `./gradlew :app:testDebugUnitTest`) check
+  the shared fixture and the tuner math. Streams with a `UsbRequest` pool (8 × 64 KB, 12 × 16 KB
   before API 28), stops after 2 s without samples. Plugin: `list()`,
   `start()` (asks USB permission, resolves `{label}` once streaming),
   `stop()`; events `frames` `{lines}` (per USB buffer with frames),
