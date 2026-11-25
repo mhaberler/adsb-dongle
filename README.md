@@ -5,6 +5,11 @@ DF17/DF18 extended-squitter frames from a TTL-UART ADS-B receiver module
 and emits one JSON object per aircraft, per line (NDJSON) on `Serial`.
 No networking, no display — UART in, JSON out.
 
+The [web viewer](#web-viewer) and the [Android app](#android--ios-app)
+show the traffic on a map. Besides this dongle they also take a receiver
+module on a USB-UART adapter, a sensorpod MQTT feed, or a plain
+[RTL-SDR stick](#rtl-sdr-stick) that they demodulate themselves.
+
 ## Supported modules
 
 Either module works as-is; both output ASCII `*<hex>;` Mode-S frames over
@@ -12,6 +17,10 @@ TTL UART at a fixed 921600 8N1, no flow control.
 
 - **Rextron 89001090**, [Technical datasheet](https://rextronaviation.weebly.com/uploads/1/3/1/2/131270069/89001090_technical.pdf)
 - **GNS5892R**, [Datasheet V13](https://www.gns-electronics.de/wp-content/uploads/2026/04/GNS5892R_ADSBModul_datasheet_V13.pdf)
+
+No module? An RTL-SDR USB stick (R820T/R820T2, RTL-SDR Blog V4/V4L) works
+directly with the web viewer and the Android app - no ESP32, no wiring.
+See [RTL-SDR stick](#rtl-sdr-stick).
 
 ## Wiring
 
@@ -70,7 +79,8 @@ list and decoder internals.
 
 `webapp/` is a browser-only ADS-B viewer: connects to the dongle over the
 [Web Serial API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API)
-(no server, no native app) or to an [MQTT broker feed](#mqtt-broker-feed), and plots live aircraft on a Leaflet map
+(no server, no native app), to an [RTL-SDR stick](#rtl-sdr-stick) over WebUSB,
+or to an [MQTT broker feed](#mqtt-broker-feed), and plots live aircraft on a Leaflet map
 (OpenStreetMap, OpenTopoMap or Esri satellite base, optional openflightmaps overlay,
 [cached for offline use](#map-layers-and-offline-cache)) with
 [trails, labels, range rings and lead vectors](#aircraft-display), styled after [airplanejs](https://github.com/watson/airplanejs). Built
